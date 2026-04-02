@@ -5,8 +5,9 @@ class Config:
     BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
     BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
 
-    _raw = os.getenv("ALLOWED_USERS", "")
+    _raw = os.getenv("ALLOWED_USERS", os.getenv("ALLOWED_USER_IDS", ""))
     ALLOWED_USERS = [int(x.strip()) for x in _raw.split(",") if x.strip().isdigit()]
+
 
     DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "BTCUSDT")
     MAX_TRADE_SIZE_USD = float(os.getenv("MAX_TRADE_SIZE_USD", "100"))
