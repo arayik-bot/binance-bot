@@ -99,7 +99,14 @@ class MarketHandler:
             for k in klines:
                 o, h, l, c = float(k[1]), float(k[2]), float(k[3]), float(k[4])
                 emoji = "🟢" if c >= o else "🔴"
-                text += f"{emoji} О:`{o:.2f}` В:`{h:.2f}` Н:`{l:.2f}` З:`{c:.2f}`\n"
+                pct = ((c - o) / o) * 100
+                text += (
+                    f"{emoji} `{pct:+.2f}%`\n"
+                    f"  О: `${o:,.2f}`\n"
+                    f"  В: `${h:,.2f}`\n"
+                    f"  Н: `${l:,.2f}`\n"
+                    f"  З: `${c:,.2f}`\n\n"
+                )
             await query.edit_message_text(text, reply_markup=back_kb(f"market_candles_{symbol}"), parse_mode='Markdown')
         except Exception as e:
             await query.edit_message_text(f"❌ Ошибка: {e}")
