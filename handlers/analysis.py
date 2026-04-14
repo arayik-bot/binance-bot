@@ -283,7 +283,7 @@ class AnalysisHandler:
             import matplotlib
             matplotlib.use('Agg')
             import matplotlib.pyplot as plt
-            from datetime import datetime
+            plt.rcParams.update({'figure.max_open_warning': 0})
 
             klines = bc.get_klines(symbol, "1h", 50)
             opens = [float(k[1]) for k in klines]
@@ -314,9 +314,9 @@ class AnalysisHandler:
                 ax1.plot([i, i], [lows[i], highs[i]], color=color, linewidth=0.8)
                 ax1.bar(i, abs(closes[i] - opens[i]), bottom=min(opens[i], closes[i]), color=color, width=0.6)
 
-            ax1.axhline(upper, color='#ff9800', linestyle='--', linewidth=0.8, alpha=0.7, label=f'BB Upper')
-            ax1.axhline(mid, color='#2196f3', linestyle='--', linewidth=0.8, alpha=0.7, label=f'BB Mid')
-            ax1.axhline(lower, color='#ff9800', linestyle='--', linewidth=0.8, alpha=0.7, label=f'BB Lower')
+            ax1.axhline(upper, color='#ff9800', linestyle='--', linewidth=0.8, alpha=0.7, label='BB Upper')
+            ax1.axhline(mid, color='#2196f3', linestyle='--', linewidth=0.8, alpha=0.7, label='BB Mid')
+            ax1.axhline(lower, color='#ff9800', linestyle='--', linewidth=0.8, alpha=0.7, label='BB Lower')
             ax1.legend(facecolor='#16213e', labelcolor='white', fontsize=8)
             ax1.set_ylabel('Price (USDT)', color='white')
             ax1.set_xlim(-1, len(closes))
@@ -334,7 +334,7 @@ class AnalysisHandler:
             buf = io.BytesIO()
             plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#1a1a2e')
             buf.seek(0)
-            plt.close()
+            plt.close(fig)
 
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔄 Tharmacel", callback_data=f"analysis_chart_{symbol}"),
@@ -349,9 +349,9 @@ class AnalysisHandler:
             )
             await query.delete_message()
 
-        except ImportError:
-            await query.edit_message_text("❌ matplotlib teghtadrvac chi.",
-                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Hет", callback_data="menu_analysis")]]))
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}",
-                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Hет", callback_data="menu_analysis")]]))
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=f"❌ Sxal: {e}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Hет", callback_data="menu_analysis")]])
+            )
