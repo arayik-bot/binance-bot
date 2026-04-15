@@ -8,12 +8,14 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from aiohttp import web
 
 # ===== ENV VARIABLES - ՔՈ ENV-ԻՆ ՀԱՐՄԱՐ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
 ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")
+PORT = int(os.getenv("PORT", 10000))
 
 # CHAT_ID սարքենք ALLOWED_USERS-ից
 try:
@@ -47,7 +49,6 @@ def get_rsi_and_chart(symbol='BTC/USDT', timeframe='5m', period=14):
     rsi = 100 - (100 / (1 + rs))
     current_rsi = rsi.iloc[-1]
 
-    # ՓՈՔՐ CHART - միայն 20 մոմ
     df = df.tail(20)
     fig, ax = plt.subplots(figsize=(6, 3), facecolor='#131722')
     ax.set_facecolor('#131722')
@@ -216,16 +217,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot-ը միացավ\n\nԱմեն 5 րոպեն մեկ կստուգեմ RSI:\nԵթե signal լինի, կուղարկեմ մի էկրանով։\n\n30վ չպատասխանես՝ ավտոմատ $25-ով կանեմ")
     context.job_queue.run_repeating(check_signal, interval=300, first=10)
 
-# ===== MAIN - PYTHON 3.14-Ի ՀԱՄԱՐ FIX =====
+# ===== FAKE WEB SERVER - RENDER-Ի ՀԱՄԱՐ =====
+async def health_check(request):
+    return web.Response(text="Bot is running")
+
+async def start_web_server():
+    app_web = web.Application()
+    app_web.router.add_get('/', health_check)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+
+# ===== MAIN =====
 async def main():
+    # Սկսենք fake web server-ը Render-ի համար
+    await start_web_server()
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, custom_amount_handler))
+
     print("Bot started...")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_polling(drop_pending_updates=True)
     await asyncio.Event().wait()
 
 if __name__ == '__main__':
