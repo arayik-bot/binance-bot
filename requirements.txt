@@ -1,5 +1,5 @@
 python-telegram-bot==21.6
-ccxt
-pandas
-matplotlib
-aiohttp
+python-binance==1.0.19
+numpy==1.26.4
+matplotlib==3.8.3
+flask==3.0.0
