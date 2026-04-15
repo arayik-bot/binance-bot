@@ -10,7 +10,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 from aiohttp import web
 
-# ===== ENV VARIABLES =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
@@ -25,7 +24,6 @@ except:
 DEFAULT_TRADE_AMOUNT = 25
 TIMEOUT_SECONDS = 30
 
-# ===== BINANCE TESTNET =====
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'secret': BINANCE_SECRET_KEY,
@@ -38,7 +36,6 @@ pending_trades = {}
 bot_running = False
 current_symbol = 'BTC/USDT'
 
-# ===== ԳԼԽԱՎՈՐ ՄԵՆՅՈՒ =====
 def get_main_menu():
     keyboard = [
         [KeyboardButton("📊 Շուկայի Տվյալներ"), KeyboardButton("💼 Պորտֆոլիո")],
@@ -47,7 +44,6 @@ def get_main_menu():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ===== RSI + CHART =====
 def get_rsi_and_chart(symbol='BTC/USDT', timeframe='5m', period=14):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=100)
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -79,7 +75,6 @@ def get_rsi_and_chart(symbol='BTC/USDT', timeframe='5m', period=14):
 
     return current_rsi, df['close'].iloc[-1], buf
 
-# ===== SIGNAL ՍՏՈՒԳԵԼ =====
 async def check_signal(context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID
     if CHAT_ID == 0 or not bot_running: return
@@ -131,7 +126,6 @@ Signal: {signal_text}
     except Exception as e:
         print(f"Signal Error: {e}")
 
-# ===== TIMEOUT TRADE =====
 async def execute_timeout_trade(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     if CHAT_ID not in pending_trades: return
@@ -152,7 +146,6 @@ async def execute_timeout_trade(context: ContextTypes.DEFAULT_TYPE):
 
     del pending_trades[CHAT_ID]
 
-# ===== INLINE ԿՈՃԱԿՆԵՐ =====
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -187,7 +180,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if CHAT_ID in pending_trades: del pending_trades[CHAT_ID]
 
-# ===== ՄԵՆՅՈՒԻ ԿՈՃԱԿՆԵՐ =====
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID, bot_running, current_symbol
     user_id = update.effective_chat.id
@@ -200,7 +192,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     CHAT_ID = user_id
 
-    # Եթե սպասում ենք custom գումար
     if CHAT_ID in pending_trades and 'waiting_custom' in pending_trades[CHAT_ID]:
         try:
             amount = float(text)
@@ -228,7 +219,6 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del pending_trades[CHAT_ID]
         return
 
-    # ===== ՄԵՆՅՈՒԻ ԲԱԺԻՆՆԵՐ =====
     if text == "📊 Շուկայի Տվյալներ":
         try:
             await context.bot.send_message(chat_id=CHAT_ID, text=f"📊 Generating chart {current_symbol}... ⏳")
@@ -304,7 +294,6 @@ Timeout: {TIMEOUT_SECONDS} վայրկյան
 Փոխելու համար կոդը խմբագրի:"""
         await update.message.reply_text(msg, reply_markup=get_main_menu())
 
-# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID
     user_id = update.effective_chat.id
@@ -320,7 +309,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Ընտրիր բաժինը:"""
     await update.message.reply_text(text, reply_markup=get_main_menu())
 
-# ===== FAKE WEB SERVER =====
 async def health_check(request):
     return web.Response(text="Bot is running")
 
@@ -332,7 +320,6 @@ async def start_web_server():
     site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
 
-# ===== MAIN =====
 async def main():
     await start_web_server()
 
