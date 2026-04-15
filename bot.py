@@ -9,18 +9,25 @@ from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# ===== ENV VARIABLES - ՍՏԵՂ ԲԱՆ ՉԵՍ ՓՈԽՈՒՄ =====
+# ===== ENV VARIABLES - ՔՈ ENV-ԻՆ ՀԱՐՄԱՐ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = int(os.getenv("CHAT_ID", "0"))
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY") # Քո մոտ սենց ա
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "") # Քո մոտ սենց ա
+
+# CHAT_ID սարքենք ALLOWED_USERS-ից
+try:
+    CHAT_ID = int(ALLOWED_USERS.split(",")[0].strip()) # Վերցնում ենք առաջին ID-ն
+except:
+    CHAT_ID = 0 # Եթե դատարկ ա, /start-ից կստուգենք
+
 DEFAULT_TRADE_AMOUNT = 25
 TIMEOUT_SECONDS = 30
 
 # ===== BINANCE TESTNET =====
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_API_SECRET,
+    'secret': BINANCE_SECRET_KEY, # Փոխեցի
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
 })
@@ -63,6 +70,9 @@ def get_rsi_and_chart(symbol='BTC/USDT', timeframe='5m', period=14):
 
 # ===== SIGNAL ՍՏՈՒԳԵԼ =====
 async def check_signal(context: ContextTypes.DEFAULT_TYPE):
+    global CHAT_ID
+    if CHAT_ID == 0: return
+
     try:
         rsi, price, chart = get_rsi_and_chart()
 
@@ -194,10 +204,16 @@ async def custom_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.id!= CHAT_ID:
+    global CHAT_ID
+    user_id = update.effective_chat.id
+
+    # Ստուգենք ALLOWED_USERS-ի մեջ կա՞
+    allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
+    if user_id not in allowed:
         await update.message.reply_text("⛔ Դու չես կարա օգտագործես էս բոտը")
         return
 
+    CHAT_ID = user_id # Սահմանենք CHAT_ID-ը
     await update.message.reply_text("✅ Bot-ը միացավ\n\nԱմեն 5 րոպեն մեկ կստուգեմ RSI:\nԵթե signal լինի, կուղարկեմ մի էկրանով։\n\n30վ չպատասխանես՝ ավտոմատ $25-ով կանեմ")
     context.job_queue.run_repeating(check_signal, interval=300, first=10)
 
