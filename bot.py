@@ -12,14 +12,14 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 # ===== ENV VARIABLES - ՔՈ ENV-ԻՆ ՀԱՐՄԱՐ =====
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY") # Քո մոտ սենց ա
-ALLOWED_USERS = os.getenv("ALLOWED_USERS", "") # Քո մոտ սենց ա
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")
 
 # CHAT_ID սարքենք ALLOWED_USERS-ից
 try:
-    CHAT_ID = int(ALLOWED_USERS.split(",")[0].strip()) # Վերցնում ենք առաջին ID-ն
+    CHAT_ID = int(ALLOWED_USERS.split(",")[0].strip())
 except:
-    CHAT_ID = 0 # Եթե դատարկ ա, /start-ից կստուգենք
+    CHAT_ID = 0
 
 DEFAULT_TRADE_AMOUNT = 25
 TIMEOUT_SECONDS = 30
@@ -27,7 +27,7 @@ TIMEOUT_SECONDS = 30
 # ===== BINANCE TESTNET =====
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_SECRET_KEY, # Փոխեցի
+    'secret': BINANCE_SECRET_KEY,
     'enableRateLimit': True,
     'options': {'defaultType': 'spot'}
 })
@@ -207,24 +207,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CHAT_ID
     user_id = update.effective_chat.id
 
-    # Ստուգենք ALLOWED_USERS-ի մեջ կա՞
     allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
     if user_id not in allowed:
         await update.message.reply_text("⛔ Դու չես կարա օգտագործես էս բոտը")
         return
 
-    CHAT_ID = user_id # Սահմանենք CHAT_ID-ը
+    CHAT_ID = user_id
     await update.message.reply_text("✅ Bot-ը միացավ\n\nԱմեն 5 րոպեն մեկ կստուգեմ RSI:\nԵթե signal լինի, կուղարկեմ մի էկրանով։\n\n30վ չպատասխանես՝ ավտոմատ $25-ով կանեմ")
     context.job_queue.run_repeating(check_signal, interval=300, first=10)
 
-# ===== MAIN =====
-def main():
+# ===== MAIN - PYTHON 3.14-Ի ՀԱՄԱՐ FIX =====
+async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, custom_amount_handler))
     print("Bot started...")
-    app.run_polling()
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
