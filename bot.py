@@ -1,338 +1,308 @@
+import logging
 import os
 import asyncio
-import ccxt
-import pandas as pd
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from io import BytesIO
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from aiohttp import web
+from threading import Thread
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
+)
+from config import Config
+from handlers.market import MarketHandler
+from handlers.portfolio import PortfolioHandler
+from handlers.trading import TradingHandler
+from handlers.alerts import AlertHandler
+from handlers.analysis import AnalysisHandler
+from handlers.admin import AdminHandler
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
-ALLOWED_USERS = os.getenv("ALLOWED_USERS", "")
-PORT = int(os.getenv("PORT", 10000))
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-try:
-    CHAT_ID = int(ALLOWED_USERS.split(",")[0].strip())
-except:
-    CHAT_ID = 0
+flask_app = Flask(__name__)
 
-DEFAULT_TRADE_AMOUNT = 25
-TIMEOUT_SECONDS = 30
+@flask_app.route('/')
+def home():
+    return 'Бот работает! ✅', 200
 
-exchange = ccxt.binance({
-    'apiKey': BINANCE_API_KEY,
-    'secret': BINANCE_SECRET_KEY,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
-})
-exchange.set_sandbox_mode(True)
+@flask_app.route('/health')
+def health():
+    return 'OK', 200
 
-pending_trades = {}
-bot_running = False
-current_symbol = 'BTC/USDT'
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port, use_reloader=False)
 
-def get_main_menu():
-    keyboard = [
-        [KeyboardButton("📊 Շուկայի Տվյալներ"), KeyboardButton("💼 Պորտֆոլիո")],
-        [KeyboardButton("🤖 Ավտո Առևտուր"), KeyboardButton("🔔 Ծանուցումներ")],
-        [KeyboardButton("📈 Վերլուծություն"), KeyboardButton("⚙️ Կառավարում")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_rsi_and_chart(symbol='BTC/USDT', timeframe='5m', period=14):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=100)
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+def is_authorized(user_id: int) -> bool:
+    return user_id in Config.ALLOWED_USERS
 
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    current_rsi = rsi.iloc[-1]
-
-    df = df.tail(20)
-    fig, ax = plt.subplots(figsize=(6, 3), facecolor='#131722')
-    ax.set_facecolor('#131722')
-
-    for i in range(len(df)):
-        color = '#089981' if df['close'].iloc[i] >= df['open'].iloc[i] else '#F23645'
-        ax.plot([i, i], [df['low'].iloc[i], df['high'].iloc[i]], color=color, linewidth=1)
-        ax.plot([i, i], [df['open'].iloc[i], df['close'].iloc[i]], color=color, linewidth=4)
-
-    ax.set_xticks([]); ax.set_yticks([])
-    for spine in ax.spines.values(): spine.set_visible(False)
-    plt.tight_layout(pad=0.1)
-
-    buf = BytesIO()
-    plt.savefig(buf, format='png', facecolor='#131722', dpi=100)
-    buf.seek(0)
-    plt.close()
-
-    return current_rsi, df['close'].iloc[-1], buf
-
-async def check_signal(context: ContextTypes.DEFAULT_TYPE):
-    global CHAT_ID
-    if CHAT_ID == 0 or not bot_running: return
-
-    try:
-        rsi, price, chart = get_rsi_and_chart(current_symbol)
-
-        action = None
-        if rsi < 30:
-            action, signal_text, emoji = 'buy', "BUY ✅", "📈"
-        elif rsi > 70:
-            action, signal_text, emoji = 'sell', "SELL 🔴", "📉"
-        else:
-            return
-
-        rsi_bar = "▓" * int(rsi/10) + "░" * (10 - int(rsi/10))
-        rsi_status = "OVERSOLD" if rsi < 30 else "OVERBOUGHT"
-
-        text = f"""{current_symbol} ${price:,.0f} {emoji}
-━━━━━━━━━━━━━━━━━━━━━━
-RSI: {rsi:.1f} {rsi_bar} {rsi_status}
-Signal: {signal_text}
-
-Ընտրիր գումարը․"""
-
-        keyboard = [
-            [InlineKeyboardButton("$10", callback_data=f"trade_{action}_10"),
-             InlineKeyboardButton("$25", callback_data=f"trade_{action}_25")],
-            [InlineKeyboardButton("$50", callback_data=f"trade_{action}_50"),
-             InlineKeyboardButton("$100", callback_data=f"trade_{action}_100")],
-            [InlineKeyboardButton("Custom $", callback_data=f"custom_{action}"),
-             InlineKeyboardButton("Cancel", callback_data="cancel")]
-        ]
-
-        msg = await context.bot.send_photo(
-            chat_id=CHAT_ID,
-            photo=chart,
-            caption=text + f"\n⏱ {TIMEOUT_SECONDS}s մինչև ավտոմատ ${DEFAULT_TRADE_AMOUNT}",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-        pending_trades[CHAT_ID] = {'action': action, 'symbol': current_symbol, 'msg_id': msg.message_id, 'price': price}
-
-        context.job_queue.run_once(
-            execute_timeout_trade, TIMEOUT_SECONDS,
-            data={'chat_id': CHAT_ID, 'action': action, 'amount': DEFAULT_TRADE_AMOUNT},
-            name=f"timeout_{msg.message_id}"
-        )
-    except Exception as e:
-        print(f"Signal Error: {e}")
-
-async def execute_timeout_trade(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    if CHAT_ID not in pending_trades: return
-
-    action = job.data['action']
-    amount = job.data['amount']
-    price = pending_trades[CHAT_ID]['price']
-    symbol = pending_trades[CHAT_ID]['symbol']
-
-    try:
-        if action == 'buy':
-            order = exchange.create_market_buy_order(symbol, amount / price)
-        else:
-            order = exchange.create_market_sell_order(symbol, amount / price)
-        await context.bot.send_message(CHAT_ID, f"⏱ Timeout! Ավտոմատ {action.upper()} ${amount}\nOrder ID: {order['id']}", reply_markup=get_main_menu())
-    except Exception as e:
-        await context.bot.send_message(CHAT_ID, f"❌ Error: {str(e)}", reply_markup=get_main_menu())
-
-    del pending_trades[CHAT_ID]
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    for job in context.job_queue.get_jobs_by_name(f"timeout_{query.message.message_id}"):
-        job.schedule_removal()
-
-    if query.data == "cancel":
-        await query.edit_message_caption(caption="❌ Trade-ը չեղարկվեց")
-        if CHAT_ID in pending_trades: del pending_trades[CHAT_ID]
-        return
-
-    if query.data.startswith("custom_"):
-        pending_trades[CHAT_ID]['waiting_custom'] = query.data.split("_")[1]
-        await query.edit_message_caption(caption="Գրիր գումարը, օրինակ՝ 37")
-        return
-
-    if query.data.startswith("trade_"):
-        _, action, amount = query.data.split("_")
-        amount = float(amount)
-        price = pending_trades[CHAT_ID]['price']
-        symbol = pending_trades[CHAT_ID]['symbol']
-
-        try:
-            if action == 'buy':
-                order = exchange.create_market_buy_order(symbol, amount / price)
-            else:
-                order = exchange.create_market_sell_order(symbol, amount / price)
-            await query.edit_message_caption(caption=f"✅ {action.upper()} ${amount}\nOrder ID: {order['id']}")
-        except Exception as e:
-            await query.edit_message_caption(caption=f"❌ Error: {str(e)}")
-
-        if CHAT_ID in pending_trades: del pending_trades[CHAT_ID]
-
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global CHAT_ID, bot_running, current_symbol
-    user_id = update.effective_chat.id
-    text = update.message.text
-
-    allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
-    if user_id not in allowed:
-        await update.message.reply_text("⛔ Դու չես կարա օգտագործես էս բոտը")
-        return
-
-    CHAT_ID = user_id
-
-    if CHAT_ID in pending_trades and 'waiting_custom' in pending_trades[CHAT_ID]:
-        try:
-            amount = float(text)
-            if amount <= 0: raise ValueError
-        except:
-            await update.message.reply_text("Խնդրում եմ թիվ գրի, օրինակ՝ 37", reply_markup=get_main_menu())
-            return
-
-        action = pending_trades[CHAT_ID]['waiting_custom']
-        price = pending_trades[CHAT_ID]['price']
-        symbol = pending_trades[CHAT_ID]['symbol']
-
-        for job in context.job_queue.get_jobs_by_name(f"timeout_{pending_trades[CHAT_ID]['msg_id']}"):
-            job.schedule_removal()
-
-        try:
-            if action == 'buy':
-                order = exchange.create_market_buy_order(symbol, amount / price)
-            else:
-                order = exchange.create_market_sell_order(symbol, amount / price)
-            await update.message.reply_text(f"✅ {action.upper()} ${amount}\nOrder ID: {order['id']}", reply_markup=get_main_menu())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=get_main_menu())
-
-        del pending_trades[CHAT_ID]
-        return
-
-    if text == "📊 Շուկայի Տվյալներ":
-        try:
-            await context.bot.send_message(chat_id=CHAT_ID, text=f"📊 Generating chart {current_symbol}... ⏳")
-            rsi, price, chart = get_rsi_and_chart(current_symbol)
-            rsi_bar = "▓" * int(rsi/10) + "░" * (10 - int(rsi/10))
-            status = "OVERSOLD 🔴" if rsi < 30 else "OVERBOUGHT 🔴" if rsi > 70 else "NORMAL 🟢"
-            msg = f"{current_symbol}\nԳին: ${price:,.2f}\nRSI: {rsi:.1f} {rsi_bar}\nStatus: {status}"
-            await context.bot.send_photo(chat_id=CHAT_ID, photo=chart, caption=msg, reply_markup=get_main_menu())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=get_main_menu())
-
-    elif text == "💼 Պորտֆոլիո":
-        try:
-            balance = exchange.fetch_balance()
-            usdt = balance['USDT']['free'] if 'USDT' in balance else 0
-            btc = balance['BTC']['free'] if 'BTC' in balance else 0
-            ticker = exchange.fetch_ticker('BTC/USDT')
-            total = usdt + btc * ticker['last']
-            msg = f"""💼 Պորտֆոլիո (Testnet)
-━━━━━━━━━━━━━━━━━━━━━━
-USDT: ${usdt:.2f}
-BTC: {btc:.6f}
-
-Ընդհանուր: ${total:.2f}"""
-            await update.message.reply_text(msg, reply_markup=get_main_menu())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=get_main_menu())
-
-    elif text == "🤖 Ավտո Առևտուր":
-        if bot_running:
-            bot_running = False
-            for job in context.job_queue.get_jobs_by_name("rsi_check"):
-                job.schedule_removal()
-            await update.message.reply_text("🛑 Ավտո առևտուրը անջատվեց", reply_markup=get_main_menu())
-        else:
-            bot_running = True
-            context.job_queue.run_repeating(check_signal, interval=300, first=10, name="rsi_check")
-            await update.message.reply_text("✅ Ավտո առևտուրը միացավ\n\nԱմեն 5 րոպեն մեկ կստուգեմ RSI:\nSignal լինի՝ կուղարկեմ:", reply_markup=get_main_menu())
-
-    elif text == "🔔 Ծանուցումներ":
-        status = "Միացված ✅" if bot_running else "Անջատված ❌"
-        msg = f"""🔔 Ծանուցումներ
-━━━━━━━━━━━━━━━━━━━━━━
-Կարգավիճակ: {status}
-
-Միացնել/անջատելու համար սեղմիր '🤖 Ավտո Առևտուր'"""
-        await update.message.reply_text(msg, reply_markup=get_main_menu())
-
-    elif text == "📈 Վերլուծություն":
-        try:
-            await context.bot.send_message(chat_id=CHAT_ID, text="📈 Վերլուծությունը պատրաստվում է... ⏳")
-            rsi, price, chart = get_rsi_and_chart(current_symbol, '1h')
-            msg = f"""📈 Վերլուծություն 1H
-━━━━━━━━━━━━━━━━━━━━━━
-{current_symbol}: ${price:,.2f}
-RSI: {rsi:.1f}
-
-Եթե RSI < 30՝ BUY signal 📈
-Եթե RSI > 70՝ SELL signal 📉
-Հակառակ դեպքում՝ սպասել"""
-            await context.bot.send_photo(chat_id=CHAT_ID, photo=chart, caption=msg, reply_markup=get_main_menu())
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}", reply_markup=get_main_menu())
-
-    elif text == "⚙️ Կառավարում":
-        msg = f"""⚙️ Կարգավորումներ
-━━━━━━━━━━━━━━━━━━━━━━
-Ընթացիկ զույգ: {current_symbol}
-Ավտոմատ գումար: ${DEFAULT_TRADE_AMOUNT}
-Timeout: {TIMEOUT_SECONDS} վայրկյան
-Ավտո առևտուր: {"Միացված ✅" if bot_running else "Անջատված ❌"}
-
-Փոխելու համար կոդը խմբագրի:"""
-        await update.message.reply_text(msg, reply_markup=get_main_menu())
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global CHAT_ID
-    user_id = update.effective_chat.id
-
-    allowed = [int(x.strip()) for x in ALLOWED_USERS.split(",") if x.strip()]
-    if user_id not in allowed:
-        await update.message.reply_text("⛔ Դու չես կարա օգտագործես էս բոտը")
+    if not is_authorized(update.effective_user.id):
+        await update.message.reply_text("❌ У вас нет доступа.")
         return
+    keyboard = [
+        [InlineKeyboardButton("📊 Рыночные Данные (Market)", callback_data="menu_market"),
+         InlineKeyboardButton("💼 Портфель (Portfolio)", callback_data="menu_portfolio")],
+        [InlineKeyboardButton("🤖 Авто Торговля (Trading)", callback_data="menu_trading"),
+         InlineKeyboardButton("🔔 Уведомления (Alerts)", callback_data="menu_alerts")],
+        [InlineKeyboardButton("📈 Анализ (Analysis)", callback_data="menu_analysis"),
+         InlineKeyboardButton("🛠 Управление (Admin)", callback_data="menu_admin")],
+    ]
+    await update.message.reply_text(
+        "🚀 *Binance Trading Bot*\n\nВыберите раздел:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode='Markdown'
+    )
 
-    CHAT_ID = user_id
-    text = """🚀 Binance Trading Bot
 
-Ընտրիր բաժինը:"""
-    await update.message.reply_text(text, reply_markup=get_main_menu())
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not is_authorized(query.from_user.id):
+        await query.edit_message_text("❌ У вас нет доступа.")
+        return
+    data = query.data
 
-async def health_check(request):
-    return web.Response(text="Bot is running")
+    if data == "menu_market":
+        kb = [
+            [InlineKeyboardButton("💰 Цена (Price)", callback_data="market_price"),
+             InlineKeyboardButton("📊 Статистика 24ч (Stats)", callback_data="market_stats")],
+            [InlineKeyboardButton("📖 Стакан (Order Book)", callback_data="market_orderbook"),
+             InlineKeyboardButton("🕯 Свечи (Candles)", callback_data="market_candles")],
+            [InlineKeyboardButton("🏆 Лидеры роста (Gainers)", callback_data="market_gainers"),
+             InlineKeyboardButton("📉 Лидеры падения (Losers)", callback_data="market_losers")],
+            [InlineKeyboardButton("💸 Ставка финансирования (Funding)", callback_data="market_funding"),
+             InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text("📊 *Рыночные Данные*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def start_web_server():
-    app_web = web.Application()
-    app_web.router.add_get('/', health_check)
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
+    elif data == "menu_portfolio":
+        kb = [
+            [InlineKeyboardButton("💰 Баланс Спот (Spot)", callback_data="portfolio_spot"),
+             InlineKeyboardButton("📊 Баланс Фьючерс (Futures)", callback_data="portfolio_futures")],
+            [InlineKeyboardButton("📋 Открытые ордера (Orders)", callback_data="portfolio_orders"),
+             InlineKeyboardButton("📜 История сделок (History)", callback_data="portfolio_history")],
+            [InlineKeyboardButton("💹 Прибыль/убыток (PnL)", callback_data="portfolio_pnl"),
+             InlineKeyboardButton("🥧 Распределение (Allocation)", callback_data="portfolio_allocation")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text("💼 *Портфель*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-async def main():
-    await start_web_server()
+    elif data == "menu_trading":
+        status = "🟢 Активна" if context.bot_data.get('trading_active', False) else "🔴 Остановлена"
+        kb = [
+            [InlineKeyboardButton("▶️ Запустить торговлю", callback_data="trade_start"),
+             InlineKeyboardButton("⏹ Остановить", callback_data="trade_stop")],
+            [InlineKeyboardButton("🤖 Стратегия RSI+MA", callback_data="trade_rsi"),
+             InlineKeyboardButton("📋 Информация", callback_data="trade_info")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text(f"🤖 *Авто Торговля*\nСтатус: {status}\n\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    elif data == "menu_alerts":
+        kb = [
+            [InlineKeyboardButton("🔔 Создать уведомление", callback_data="alert_price"),
+             InlineKeyboardButton("📜 Мои уведомления", callback_data="alert_list")],
+            [InlineKeyboardButton("❌ Удалить все", callback_data="alert_clear"),
+             InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text("🔔 *Уведомления (Alerts)*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+    elif data == "menu_analysis":
+        kb = [
+            [InlineKeyboardButton("📊 RSI (Индекс силы)", callback_data="analysis_rsi"),
+             InlineKeyboardButton("📈 MACD (Схождение/расхождение)", callback_data="analysis_macd")],
+            [InlineKeyboardButton("📉 Bollinger Bands (Полосы)", callback_data="analysis_bb"),
+             InlineKeyboardButton("🎯 Поддержка/Сопротивление (S/R)", callback_data="analysis_sr")],
+            [InlineKeyboardButton("📡 Сигналы (Signals)", callback_data="analysis_signals"),
+             InlineKeyboardButton("📊 График (Chart)", callback_data="analysis_chart")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text("📈 *Технический Анализ*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+    elif data == "menu_admin":
+        kb = [
+            [InlineKeyboardButton("📜 Логи (Logs)", callback_data="admin_logs"),
+             InlineKeyboardButton("🔍 Статус бота", callback_data="admin_status")],
+            [InlineKeyboardButton("🛡 Режим чтения (Read-Only)", callback_data="admin_readonly"),
+             InlineKeyboardButton("📊 Лимиты рисков", callback_data="admin_limit")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+        ]
+        await query.edit_message_text("🛠 *Управление (Admin)*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+    elif data == "menu_main":
+        kb = [
+            [InlineKeyboardButton("📊 Рыночные Данные (Market)", callback_data="menu_market"),
+             InlineKeyboardButton("💼 Портфель (Portfolio)", callback_data="menu_portfolio")],
+            [InlineKeyboardButton("🤖 Авто Торговля (Trading)", callback_data="menu_trading"),
+             InlineKeyboardButton("🔔 Уведомления (Alerts)", callback_data="menu_alerts")],
+            [InlineKeyboardButton("📈 Анализ (Analysis)", callback_data="menu_analysis"),
+             InlineKeyboardButton("🛠 Управление (Admin)", callback_data="menu_admin")]
+        ]
+        await query.edit_message_text("🚀 *Binance Trading Bot*\n\nВыберите раздел:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+
+    elif data.startswith("market_"):
+        await MarketHandler().handle(query, context, data)
+    elif data.startswith("portfolio_"):
+        await PortfolioHandler().handle(query, context, data)
+    elif data.startswith("trade_"):
+        await TradingHandler().handle(query, context, data)
+    elif data.startswith("execute_trade_"):
+        await TradingHandler().execute_trade(query, context, data)
+    elif data.startswith("confirm_trade_"):
+        await TradingHandler().confirm_trade(query, context, data)
+    elif data.startswith("alert_"):
+        await AlertHandler().handle(query, context, data)
+    elif data.startswith("analysis_"):
+        await AnalysisHandler().handle(query, context, data)
+    elif data.startswith("admin_"):
+        await AdminHandler().handle(query, context, data)
+    elif data == "custom_amount":
+        pending = context.user_data.get('pending_trade', {})
+        if pending:
+            context.user_data['waiting_custom_amount'] = True
+            await query.edit_message_text(
+                f"✏️ Введите сумму в USD\nНапример: `37`\n\n"
+                f"Монета: {pending.get('symbol','BTCUSDT')} | {pending.get('direction','BUY')}",
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text("❌ Ошибка. Напишите /start")
+
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    text = update.message.text.strip()
+    if context.user_data.get('waiting_custom_amount'):
+        try:
+            amount = float(text.replace('$', '').replace(',', ''))
+            context.user_data['waiting_custom_amount'] = False
+            await TradingHandler().show_trade_confirm(update, context, amount)
+        except ValueError:
+            await update.message.reply_text("❌ Ошибка. Введите число, например: `37`", parse_mode='Markdown')
+    elif context.user_data.get('waiting_alert_price'):
+        await AlertHandler().process_alert_input(update, context, text)
+
+
+async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    if context.args:
+        await MarketHandler().get_price(update, context, context.args[0].upper())
+    else:
+        await update.message.reply_text("Пример: `/price BTC`", parse_mode='Markdown')
+
+
+async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update.effective_user.id):
+        return
+    if len(context.args) >= 2:
+        try:
+            await AlertHandler().set_price_alert(update, context, context.args[0].upper(), float(context.args[1]))
+        except ValueError:
+            await update.message.reply_text("Пример: `/alert BTC 90000`", parse_mode='Markdown')
+    else:
+        await update.message.reply_text("Пример: `/alert BTC 90000`", parse_mode='Markdown')
+
+
+async def alert_checker(app):
+    while True:
+        await asyncio.sleep(Config.ALERT_CHECK_INTERVAL)
+        alerts = app.bot_data.get('price_alerts', [])
+        for alert in alerts:
+            if not alert.get('active'):
+                continue
+            try:
+                from binance_client import get_price
+                current = get_price(alert['symbol'])
+                target = alert['target_price']
+                last = alert.get('last_price')
+                if last is not None:
+                    if (last < target <= current) or (last > target >= current):
+                        e = "⬆️" if current >= target else "⬇️"
+                        await app.bot.send_message(
+                            chat_id=alert['user_id'],
+                            text=(
+                                f"🔔 *Уведомление о цене (Price Alert)!*\n\n"
+                                f"{e} `{alert['symbol']}`\n"
+                                f"Достигла `${current:,.4f}`\n"
+                                f"Ваша цель (target): `${target:,.4f}`"
+                            ),
+                            parse_mode='Markdown'
+                        )
+                        alert['active'] = False
+                alert['last_price'] = current
+            except Exception as ex:
+                logger.error(f"Alert error: {ex}")
+
+
+async def strategy_checker(app):
+    while True:
+        await asyncio.sleep(Config.STRATEGY_CHECK_INTERVAL)
+        if not app.bot_data.get('trading_active', False):
+            continue
+        try:
+            from handlers.trading import get_rsi_ma_signal
+            sig = get_rsi_ma_signal(Config.DEFAULT_SYMBOL)
+            if sig['signal'] not in ['BUY', 'SELL']:
+                continue
+            d = sig['signal']
+            d_ru = "КУПИТЬ" if d == "BUY" else "ПРОДАТЬ"
+            e = "🟢" if d == "BUY" else "🔴"
+            sym = Config.DEFAULT_SYMBOL
+            kb = [
+                [InlineKeyboardButton(f"$10 {e}", callback_data=f"confirm_trade_{d}_{sym}_10"),
+                 InlineKeyboardButton(f"$25 {e}", callback_data=f"confirm_trade_{d}_{sym}_25"),
+                 InlineKeyboardButton(f"$50 {e}", callback_data=f"confirm_trade_{d}_{sym}_50"),
+                 InlineKeyboardButton(f"$100 {e}", callback_data=f"confirm_trade_{d}_{sym}_100")],
+                [InlineKeyboardButton("✏️ Другая сумма", callback_data="custom_amount"),
+                 InlineKeyboardButton("❌ Пропустить", callback_data="menu_trading")]
+            ]
+            for uid in Config.ALLOWED_USERS:
+                try:
+                    await app.bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            f"🤖 *Торговый сигнал (Trading Signal)!*\n\n"
+                            f"{e} *{d_ru}* `{sym}`\n"
+                            f"💰 Цена (Price): `${sig['price']:,.4f}`\n"
+                            f"📊 RSI: `{sig['rsi']:.1f}`\n"
+                            f"📝 {sig['reason']}\n\n"
+                            f"Выберите сумму или пропустите:"
+                        ),
+                        reply_markup=InlineKeyboardMarkup(kb),
+                        parse_mode='Markdown'
+                    )
+                except Exception as ex:
+                    logger.error(f"Send error: {ex}")
+        except Exception as ex:
+            logger.error(f"Strategy error: {ex}")
+
+
+async def run_bot():
+    Thread(target=run_flask, daemon=True).start()
+    logger.info("✅ Flask started!")
+
+    app = ApplicationBuilder().token(Config.TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
+    app.add_handler(CommandHandler("price", price_command))
+    app.add_handler(CommandHandler("alert", alert_command))
+    app.add_handler(CallbackQueryHandler(menu_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    print("Bot started...")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    logger.info("✅ Bot started!")
+
+    asyncio.create_task(alert_checker(app))
+    asyncio.create_task(strategy_checker(app))
+
     await asyncio.Event().wait()
 
+
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(run_bot())
