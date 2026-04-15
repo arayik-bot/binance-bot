@@ -23,7 +23,7 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    return 'Бот работает! ✅', 200
+    return 'Բոտը աշխատում է! ✅', 200
 
 @flask_app.route('/health')
 def health():
@@ -40,20 +40,24 @@ def is_authorized(user_id: int) -> bool:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(update.effective_user.id):
-        await update.message.reply_text("❌ У вас нет доступа.")
+        await update.message.reply_text("❌ Դուք մուտք չունեք։")
         return
+    name = update.effective_user.first_name or "Օգտատեր"
     keyboard = [
-        [InlineKeyboardButton("📊 Рыночные Данные (Market)", callback_data="menu_market"),
-         InlineKeyboardButton("💼 Портфель (Portfolio)", callback_data="menu_portfolio")],
-        [InlineKeyboardButton("🤖 Авто Торговля (Trading)", callback_data="menu_trading"),
-         InlineKeyboardButton("🔔 Уведомления (Alerts)", callback_data="menu_alerts")],
-        [InlineKeyboardButton("📈 Анализ (Analysis)", callback_data="menu_analysis"),
-         InlineKeyboardButton("🛠 Управление (Admin)", callback_data="menu_admin")],
+        [InlineKeyboardButton("📊 Շուկա", callback_data="menu_market"),
+         InlineKeyboardButton("💼 Պորտֆոլիո", callback_data="menu_portfolio")],
+        [InlineKeyboardButton("🤖 Ավտո Թրեյդինգ", callback_data="menu_trading"),
+         InlineKeyboardButton("🔔 Ծանուցումներ", callback_data="menu_alerts")],
+        [InlineKeyboardButton("📈 Անալիզ", callback_data="menu_analysis"),
+         InlineKeyboardButton("🛠 Կառավարում", callback_data="menu_admin")],
     ]
     await update.message.reply_text(
-        "🚀 *Binance Trading Bot*\n\nВыберите раздел:",
+        f"👋 Բարի գալուստ, *{name}*\!\n\n"
+        f"🚀 *Binance Trading Bot*\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📌 Ընտրեք բաժինը՝",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        parse_mode='MarkdownV2'
     )
 
 
@@ -61,87 +65,108 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if not is_authorized(query.from_user.id):
-        await query.edit_message_text("❌ У вас нет доступа.")
+        await query.edit_message_text("❌ Դուք մուտք չունեք։")
         return
     data = query.data
 
     if data == "menu_market":
         kb = [
-            [InlineKeyboardButton("💰 Цена (Price)", callback_data="market_price"),
-             InlineKeyboardButton("📊 Статистика 24ч (Stats)", callback_data="market_stats")],
-            [InlineKeyboardButton("📖 Стакан (Order Book)", callback_data="market_orderbook"),
-             InlineKeyboardButton("🕯 Свечи (Candles)", callback_data="market_candles")],
-            [InlineKeyboardButton("🏆 Лидеры роста (Gainers)", callback_data="market_gainers"),
-             InlineKeyboardButton("📉 Лидеры падения (Losers)", callback_data="market_losers")],
-            [InlineKeyboardButton("💸 Ставка финансирования (Funding)", callback_data="market_funding"),
-             InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("💰 Գին", callback_data="market_price"),
+             InlineKeyboardButton("📊 Վիճակագրություն 24ժ", callback_data="market_stats")],
+            [InlineKeyboardButton("📖 Օրդեր Բուք", callback_data="market_orderbook"),
+             InlineKeyboardButton("🕯 Մոմիկներ", callback_data="market_candles")],
+            [InlineKeyboardButton("🏆 Լավագույն Աճ", callback_data="market_gainers"),
+             InlineKeyboardButton("📉 Լավագույն Անկում", callback_data="market_losers")],
+            [InlineKeyboardButton("💸 Ֆինանսավորման տոկոս", callback_data="market_funding"),
+             InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text("📊 *Рыночные Данные*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "📊 *Շուկայական Տվյալներ*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_portfolio":
         kb = [
-            [InlineKeyboardButton("💰 Баланс Спот (Spot)", callback_data="portfolio_spot"),
-             InlineKeyboardButton("📊 Баланс Фьючерс (Futures)", callback_data="portfolio_futures")],
-            [InlineKeyboardButton("📋 Открытые ордера (Orders)", callback_data="portfolio_orders"),
-             InlineKeyboardButton("📜 История сделок (History)", callback_data="portfolio_history")],
-            [InlineKeyboardButton("💹 Прибыль/убыток (PnL)", callback_data="portfolio_pnl"),
-             InlineKeyboardButton("🥧 Распределение (Allocation)", callback_data="portfolio_allocation")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("💰 Սփոթ Բալանս", callback_data="portfolio_spot"),
+             InlineKeyboardButton("📊 Ֆյուչերս Բալանս", callback_data="portfolio_futures")],
+            [InlineKeyboardButton("📋 Բաց Օրդերներ", callback_data="portfolio_orders"),
+             InlineKeyboardButton("📜 Գործարքների Պատմություն", callback_data="portfolio_history")],
+            [InlineKeyboardButton("💹 Շահույթ/Վնաս (PnL)", callback_data="portfolio_pnl"),
+             InlineKeyboardButton("🥧 Ակտիվների Բաշխում", callback_data="portfolio_allocation")],
+            [InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text("💼 *Портфель*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "💼 *Պորտֆոլիո*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_trading":
-        status = "🟢 Активна" if context.bot_data.get('trading_active', False) else "🔴 Остановлена"
+        status = "🟢 Ակտիվ" if context.bot_data.get('trading_active', False) else "🔴 Կանգնած"
         kb = [
-            [InlineKeyboardButton("▶️ Запустить торговлю", callback_data="trade_start"),
-             InlineKeyboardButton("⏹ Остановить", callback_data="trade_stop")],
-            [InlineKeyboardButton("🤖 Стратегия RSI+MA", callback_data="trade_rsi"),
-             InlineKeyboardButton("📋 Информация", callback_data="trade_info")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("▶️ Սկսել Թրեյդինգ", callback_data="trade_start"),
+             InlineKeyboardButton("⏹ Կանգնեցնել", callback_data="trade_stop")],
+            [InlineKeyboardButton("🤖 RSI+MA Ռազմավարություն", callback_data="trade_rsi"),
+             InlineKeyboardButton("📋 Տեղեկություն", callback_data="trade_info")],
+            [InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text(f"🤖 *Авто Торговля*\nСтатус: {status}\n\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            f"🤖 *Ավտո Թրեյդինգ*\n\n━━━━━━━━━━━━━━━━━━\n📡 Կարգավիճակ՝ {status}\n\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_alerts":
         kb = [
-            [InlineKeyboardButton("🔔 Создать уведомление", callback_data="alert_price"),
-             InlineKeyboardButton("📜 Мои уведомления", callback_data="alert_list")],
-            [InlineKeyboardButton("❌ Удалить все", callback_data="alert_clear"),
-             InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("🔔 Ստեղծել Ծանուցում", callback_data="alert_price"),
+             InlineKeyboardButton("📜 Իմ Ծանուցումները", callback_data="alert_list")],
+            [InlineKeyboardButton("❌ Ջնջել Բոլորը", callback_data="alert_clear"),
+             InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text("🔔 *Уведомления (Alerts)*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "🔔 *Ծանուցումներ*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_analysis":
         kb = [
-            [InlineKeyboardButton("📊 RSI (Индекс силы)", callback_data="analysis_rsi"),
-             InlineKeyboardButton("📈 MACD (Схождение/расхождение)", callback_data="analysis_macd")],
-            [InlineKeyboardButton("📉 Bollinger Bands (Полосы)", callback_data="analysis_bb"),
-             InlineKeyboardButton("🎯 Поддержка/Сопротивление (S/R)", callback_data="analysis_sr")],
-            [InlineKeyboardButton("📡 Сигналы (Signals)", callback_data="analysis_signals"),
-             InlineKeyboardButton("📊 График (Chart)", callback_data="analysis_chart")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("📊 RSI", callback_data="analysis_rsi"),
+             InlineKeyboardButton("📈 MACD", callback_data="analysis_macd")],
+            [InlineKeyboardButton("📉 Bollinger Bands", callback_data="analysis_bb"),
+             InlineKeyboardButton("🎯 Աջակցություն/Դիմադրություն", callback_data="analysis_sr")],
+            [InlineKeyboardButton("📡 Ազդանշաններ", callback_data="analysis_signals"),
+             InlineKeyboardButton("📊 Գծապատկեր", callback_data="analysis_chart")],
+            [InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text("📈 *Технический Анализ*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "📈 *Տեխնիկական Անալիզ*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_admin":
         kb = [
-            [InlineKeyboardButton("📜 Логи (Logs)", callback_data="admin_logs"),
-             InlineKeyboardButton("🔍 Статус бота", callback_data="admin_status")],
-            [InlineKeyboardButton("🛡 Режим чтения (Read-Only)", callback_data="admin_readonly"),
-             InlineKeyboardButton("📊 Лимиты рисков", callback_data="admin_limit")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="menu_main")]
+            [InlineKeyboardButton("📜 Լոգեր", callback_data="admin_logs"),
+             InlineKeyboardButton("🔍 Բոտի Կարգավիճակ", callback_data="admin_status")],
+            [InlineKeyboardButton("🛡 Կարդալ-Միայն Ռեժիմ", callback_data="admin_readonly"),
+             InlineKeyboardButton("📊 Ռիսկի Սահմանաչափ", callback_data="admin_limit")],
+            [InlineKeyboardButton("🔙 Հետ", callback_data="menu_main")]
         ]
-        await query.edit_message_text("🛠 *Управление (Admin)*\nВыберите:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "🛠 *Կառավարում*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data == "menu_main":
         kb = [
-            [InlineKeyboardButton("📊 Рыночные Данные (Market)", callback_data="menu_market"),
-             InlineKeyboardButton("💼 Портфель (Portfolio)", callback_data="menu_portfolio")],
-            [InlineKeyboardButton("🤖 Авто Торговля (Trading)", callback_data="menu_trading"),
-             InlineKeyboardButton("🔔 Уведомления (Alerts)", callback_data="menu_alerts")],
-            [InlineKeyboardButton("📈 Анализ (Analysis)", callback_data="menu_analysis"),
-             InlineKeyboardButton("🛠 Управление (Admin)", callback_data="menu_admin")]
+            [InlineKeyboardButton("📊 Շուկա", callback_data="menu_market"),
+             InlineKeyboardButton("💼 Պորտֆոլիո", callback_data="menu_portfolio")],
+            [InlineKeyboardButton("🤖 Ավտո Թրեյդինգ", callback_data="menu_trading"),
+             InlineKeyboardButton("🔔 Ծանուցումներ", callback_data="menu_alerts")],
+            [InlineKeyboardButton("📈 Անալիզ", callback_data="menu_analysis"),
+             InlineKeyboardButton("🛠 Կառավարում", callback_data="menu_admin")]
         ]
-        await query.edit_message_text("🚀 *Binance Trading Bot*\n\nВыберите раздел:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown')
+        await query.edit_message_text(
+            "🚀 *Binance Trading Bot*\n\n━━━━━━━━━━━━━━━━━━\n📌 Ընտրեք բաժինը՝",
+            reply_markup=InlineKeyboardMarkup(kb), parse_mode='Markdown'
+        )
 
     elif data.startswith("market_"):
         await MarketHandler().handle(query, context, data)
@@ -164,12 +189,13 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pending:
             context.user_data['waiting_custom_amount'] = True
             await query.edit_message_text(
-                f"✏️ Введите сумму в USD\nНапример: `37`\n\n"
-                f"Монета: {pending.get('symbol','BTCUSDT')} | {pending.get('direction','BUY')}",
+                f"✏️ *Մուտքագրեք գումարը USD-ով*\n\n"
+                f"Օրինակ՝ `37`\n\n"
+                f"🪙 Մոնետ՝ {pending.get('symbol','BTCUSDT')} | {pending.get('direction','BUY')}",
                 parse_mode='Markdown'
             )
         else:
-            await query.edit_message_text("❌ Ошибка. Напишите /start")
+            await query.edit_message_text("❌ Սխալ։ Գրեք /start")
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -182,7 +208,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['waiting_custom_amount'] = False
             await TradingHandler().show_trade_confirm(update, context, amount)
         except ValueError:
-            await update.message.reply_text("❌ Ошибка. Введите число, например: `37`", parse_mode='Markdown')
+            await update.message.reply_text("❌ Սխալ։ Մուտքագրեք թիվ, օրինակ՝ `37`", parse_mode='Markdown')
     elif context.user_data.get('waiting_alert_price'):
         await AlertHandler().process_alert_input(update, context, text)
 
@@ -193,7 +219,7 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         await MarketHandler().get_price(update, context, context.args[0].upper())
     else:
-        await update.message.reply_text("Пример: `/price BTC`", parse_mode='Markdown')
+        await update.message.reply_text("Օրինակ՝ `/price BTC`", parse_mode='Markdown')
 
 
 async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,9 +229,9 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await AlertHandler().set_price_alert(update, context, context.args[0].upper(), float(context.args[1]))
         except ValueError:
-            await update.message.reply_text("Пример: `/alert BTC 90000`", parse_mode='Markdown')
+            await update.message.reply_text("Օրինակ՝ `/alert BTC 90000`", parse_mode='Markdown')
     else:
-        await update.message.reply_text("Пример: `/alert BTC 90000`", parse_mode='Markdown')
+        await update.message.reply_text("Օրինակ՝ `/alert BTC 90000`", parse_mode='Markdown')
 
 
 async def alert_checker(app):
@@ -226,10 +252,10 @@ async def alert_checker(app):
                         await app.bot.send_message(
                             chat_id=alert['user_id'],
                             text=(
-                                f"🔔 *Уведомление о цене (Price Alert)!*\n\n"
+                                f"🔔 *Գնի Ծանուցում!*\n\n"
                                 f"{e} `{alert['symbol']}`\n"
-                                f"Достигла `${current:,.4f}`\n"
-                                f"Ваша цель (target): `${target:,.4f}`"
+                                f"💰 Հասել է՝ `${current:,.4f}`\n"
+                                f"🎯 Ձեր թիրախ՝ `${target:,.4f}`"
                             ),
                             parse_mode='Markdown'
                         )
@@ -250,7 +276,7 @@ async def strategy_checker(app):
             if sig['signal'] not in ['BUY', 'SELL']:
                 continue
             d = sig['signal']
-            d_ru = "КУПИТЬ" if d == "BUY" else "ПРОДАТЬ"
+            d_hy = "ԳՆԵԼ" if d == "BUY" else "ՎԱՃԱՌԵԼ"
             e = "🟢" if d == "BUY" else "🔴"
             sym = Config.DEFAULT_SYMBOL
             kb = [
@@ -258,20 +284,22 @@ async def strategy_checker(app):
                  InlineKeyboardButton(f"$25 {e}", callback_data=f"confirm_trade_{d}_{sym}_25"),
                  InlineKeyboardButton(f"$50 {e}", callback_data=f"confirm_trade_{d}_{sym}_50"),
                  InlineKeyboardButton(f"$100 {e}", callback_data=f"confirm_trade_{d}_{sym}_100")],
-                [InlineKeyboardButton("✏️ Другая сумма", callback_data="custom_amount"),
-                 InlineKeyboardButton("❌ Пропустить", callback_data="menu_trading")]
+                [InlineKeyboardButton("✏️ Այլ Գումար", callback_data="custom_amount"),
+                 InlineKeyboardButton("❌ Բաց Թողնել", callback_data="menu_trading")]
             ]
             for uid in Config.ALLOWED_USERS:
                 try:
                     await app.bot.send_message(
                         chat_id=uid,
                         text=(
-                            f"🤖 *Торговый сигнал (Trading Signal)!*\n\n"
-                            f"{e} *{d_ru}* `{sym}`\n"
-                            f"💰 Цена (Price): `${sig['price']:,.4f}`\n"
-                            f"📊 RSI: `{sig['rsi']:.1f}`\n"
-                            f"📝 {sig['reason']}\n\n"
-                            f"Выберите сумму или пропустите:"
+                            f"🤖 *Թրեյդինգ Ազդանշան!*\n\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"{e} *{d_hy}* `{sym}`\n"
+                            f"💰 Գին՝ `${sig['price']:,.4f}`\n"
+                            f"📊 RSI՝ `{sig['rsi']:.1f}`\n"
+                            f"📝 {sig['reason']}\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"💵 Ընտրեք գումարը՝"
                         ),
                         reply_markup=InlineKeyboardMarkup(kb),
                         parse_mode='Markdown'
