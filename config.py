@@ -1,25 +1,27 @@
 import os
+from dotenv import load_dotenv
 
-class Config:
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "YOUR_BOT_TOKEN_HERE")
-    BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
-    BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+load_dotenv()
 
-    _raw = os.getenv("ALLOWED_USERS", os.getenv("ALLOWED_USER_IDS", ""))
-    ALLOWED_USERS = [int(x.strip()) for x in _raw.split(",") if x.strip().isdigit()]
+BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
+BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Անվտանգություն
+ALLOWED_USER_IDS = list(map(int, os.getenv("ALLOWED_USER_IDS", "").split(",")))
+MAX_TRADE_SIZE_USD = float(os.getenv("MAX_TRADE_SIZE_USD", "500"))
+DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "1000"))
+READ_ONLY_MODE = os.getenv("READ_ONLY_MODE", "False").lower() == "true"
 
-    DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "BTCUSDT")
-    MAX_TRADE_SIZE_USD = float(os.getenv("MAX_TRADE_SIZE_USD", "100"))
-    DAILY_LOSS_LIMIT_USD = float(os.getenv("DAILY_LOSS_LIMIT_USD", "50"))
-    READ_ONLY = os.getenv("READ_ONLY", "false").lower() == "true"
-    FUTURES_LEVERAGE = int(os.getenv("FUTURES_LEVERAGE", "1"))
+# Trading parameters
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+MA_SHORT = 7
+MA_LONG = 25
 
-    RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))
-    RSI_OVERSOLD = float(os.getenv("RSI_OVERSOLD", "30"))
-    RSI_OVERBOUGHT = float(os.getenv("RSI_OVERBOUGHT", "70"))
-    MA_FAST = int(os.getenv("MA_FAST", "9"))
-    MA_SLOW = int(os.getenv("MA_SLOW", "21"))
+# Auto-trade confirmation timeout (seconds)
+CONFIRM_TIMEOUT = 30
 
-    ALERT_CHECK_INTERVAL = int(os.getenv("ALERT_CHECK_INTERVAL", "60"))
-    STRATEGY_CHECK_INTERVAL = int(os.getenv("STRATEGY_CHECK_INTERVAL", "300"))
+# Database (simple JSON for demo)
+DATA_FILE = "bot_data.json"
