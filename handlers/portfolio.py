@@ -20,98 +20,98 @@ class PortfolioHandler:
             await self._allocation(query)
 
     def _back(self, cb="menu_portfolio"):
-        return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Hет", callback_data=cb)]])
+        return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Հետ", callback_data=cb)]])
 
     async def _spot(self, query):
         try:
             balances = bc.get_spot_balance()
             if not balances:
-                await query.edit_message_text("💼 Spot balance datark e.", reply_markup=self._back())
+                await query.edit_message_text("💼 Սփոթ բալանսը դատարկ է։", reply_markup=self._back())
                 return
-            text = "💰 *Spot Balance*\n\n"
+            text = "💰 *Սփոթ Բալանս*\n\n━━━━━━━━━━━━━━━━━━\n"
             for b in balances[:15]:
                 free = float(b['free'])
                 locked = float(b['locked'])
-                text += f"🪙 `{b['asset']}`: free=`{free:.6f}` locked=`{locked:.6f}`\n"
+                text += f"🪙 `{b['asset']}`: ազատ=`{free:.6f}` կողպված=`{locked:.6f}`\n"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_spot"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_spot"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}\n\nAPI key-y sxal e kam ijravutyun chi.", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}\n\nAPI key-ը սխալ է կամ թույլտվություն չկա։", reply_markup=self._back())
 
     async def _futures(self, query):
         try:
             assets = bc.get_futures_balance()
             positions = bc.get_futures_positions()
-            text = "📊 *Futures Balance*\n\n"
+            text = "📊 *Ֆյուչերս Բալանս*\n\n━━━━━━━━━━━━━━━━━━\n"
             for a in assets:
                 if float(a['walletBalance']) > 0:
                     text += (
                         f"🪙 `{a['asset']}`\n"
-                        f"  Wallet: `{float(a['walletBalance']):.4f}`\n"
-                        f"  Unrealized PnL: `{float(a['unrealizedProfit']):+.4f}`\n\n"
+                        f"  Wallet՝ `{float(a['walletBalance']):.4f}`\n"
+                        f"  Չիրացված PnL՝ `{float(a['unrealizedProfit']):+.4f}`\n\n"
                     )
             if positions:
-                text += "📋 *Open Positions:*\n"
+                text += "📋 *Բաց Պոզիցիաներ՝*\n"
                 for p in positions:
                     side = "LONG" if float(p['positionAmt']) > 0 else "SHORT"
                     pnl = float(p['unrealizedProfit'])
                     e = "📈" if pnl >= 0 else "📉"
-                    text += f"{e} `{p['symbol']}` {side} PnL: `{pnl:+.4f}`\n"
+                    text += f"{e} `{p['symbol']}` {side} PnL՝ `{pnl:+.4f}`\n"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_futures"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_futures"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}", reply_markup=self._back())
 
     async def _orders(self, query):
         try:
             orders = bc.get_open_orders()
             if not orders:
-                text = "📋 *Open Orders*\n\n✅ Activ orders ckan."
+                text = "📋 *Բաց Օրդերներ*\n\n━━━━━━━━━━━━━━━━━━\n✅ Ակտիվ օրդերներ չկան։"
             else:
-                text = f"📋 *Open Orders ({len(orders)})*\n\n"
+                text = f"📋 *Բաց Օրդերներ ({len(orders)})*\n\n━━━━━━━━━━━━━━━━━━\n"
                 for o in orders[:10]:
                     e = "🟢" if o['side'] == 'BUY' else "🔴"
                     text += f"{e} `{o['symbol']}` {o['side']} qty=`{o['origQty']}` @ `${float(o['price']):.4f}`\n"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_orders"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_orders"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}", reply_markup=self._back())
 
     async def _history(self, query, context):
         symbol = context.user_data.get('symbol', 'BTCUSDT')
         try:
             trades = bc.get_trade_history(symbol, 10)
             if not trades:
-                text = f"📜 *Trade History — {symbol}*\n\nGorcarqner ckan."
+                text = f"📜 *Գործարքների Պատմություն — {symbol}*\n\n━━━━━━━━━━━━━━━━━━\nԳործարքներ չկան։"
             else:
-                text = f"📜 *Last Trades — {symbol}*\n\n"
+                text = f"📜 *Վերջին Գործարքներ — {symbol}*\n\n━━━━━━━━━━━━━━━━━━\n"
                 for t in trades:
                     e = "🟢" if t['isBuyer'] else "🔴"
-                    action = "BUY" if t['isBuyer'] else "SELL"
+                    action = "ԳՆԵ" if t['isBuyer'] else "ՎԱՃԱ"
                     text += f"{e} {action} {t['qty']} @ `${float(t['price']):.4f}`\n"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_history"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_history"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}", reply_markup=self._back())
 
     async def _pnl(self, query):
         try:
             positions = bc.get_futures_positions()
-            text = "💹 *PnL Report*\n\n"
+            text = "💹 *Շահույթ/Վնաս (PnL)*\n\n━━━━━━━━━━━━━━━━━━\n"
             if not positions:
-                text += "Activ futures positions ckan."
+                text += "Ակտիվ ֆյուչերս պոզիցիաներ չկան։"
             else:
                 total = 0
                 for p in positions:
@@ -119,16 +119,16 @@ class PortfolioHandler:
                     total += pnl
                     side = "LONG" if float(p['positionAmt']) > 0 else "SHORT"
                     e = "📈" if pnl >= 0 else "📉"
-                    text += f"{e} `{p['symbol']}` {side}\n  PnL: `{pnl:+.4f} USDT`\n  Entry: `${float(p['entryPrice']):.4f}`\n\n"
+                    text += f"{e} `{p['symbol']}` {side}\n  PnL՝ `{pnl:+.4f} USDT`\n  Մուտք՝ `${float(p['entryPrice']):.4f}`\n\n"
                 e2 = "📈" if total >= 0 else "📉"
-                text += f"{e2} *Total: `{total:+.4f} USDT`*"
+                text += f"━━━━━━━━━━━━━━━━━━\n{e2} *Ընդամենը՝ `{total:+.4f} USDT`*"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_pnl"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_pnl"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}", reply_markup=self._back())
 
     async def _allocation(self, query):
         try:
@@ -149,19 +149,19 @@ class PortfolioHandler:
                         total += val
                     except:
                         pass
-            text = "🥧 *Asset Allocation*\n\n"
+            text = "🥧 *Ակտիվների Բաշխում*\n\n━━━━━━━━━━━━━━━━━━\n"
             if total > 0:
                 for asset, val in sorted(usdt_vals.items(), key=lambda x: x[1], reverse=True)[:10]:
                     pct = (val / total) * 100
                     bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
                     text += f"`{asset:8}` `{pct:.1f}%` ~`${val:.2f}`\n"
-                text += f"\n💰 *Total: ~${total:.2f} USDT*"
+                text += f"\n━━━━━━━━━━━━━━━━━━\n💰 *Ընդամենը՝ ~${total:.2f} USDT*"
             else:
-                text += "Balance datark e."
+                text += "Բալանսը դատարկ է։"
             kb = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Tharmacel", callback_data="portfolio_allocation"),
-                InlineKeyboardButton("🔙 Hет", callback_data="menu_portfolio")
+                InlineKeyboardButton("🔄 Թարմացնել", callback_data="portfolio_allocation"),
+                InlineKeyboardButton("🔙 Հետ", callback_data="menu_portfolio")
             ]])
             await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
         except Exception as e:
-            await query.edit_message_text(f"❌ Sxal: {e}", reply_markup=self._back())
+            await query.edit_message_text(f"❌ Սխալ՝ {e}", reply_markup=self._back())
