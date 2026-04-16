@@ -27,10 +27,10 @@ class AlertHandler:
              InlineKeyboardButton("ETH", callback_data="alert_sym_ETH"),
              InlineKeyboardButton("BNB", callback_data="alert_sym_BNB"),
              InlineKeyboardButton("SOL", callback_data="alert_sym_SOL")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="menu_alerts")]
+            [InlineKeyboardButton("❌ Չեղարկել", callback_data="menu_alerts")]
         ])
         await query.edit_message_text(
-            "🔔 *Уведомление о цене (Price Alert)*\n\nИли напишите `/alert BTC 90000`\n\nСначала выберите монету (coin):",
+            "🔔 *Գնի Ծանուցում*\n\n━━━━━━━━━━━━━━━━━━\nԿամ գրեք `/alert BTC 90000`\n\nՆախ ընտրեք մոնետը՝",
             reply_markup=kb, parse_mode='Markdown'
         )
 
@@ -46,11 +46,11 @@ class AlertHandler:
             try:
                 price = bc.get_price(symbol)
                 await update.message.reply_text(
-                    f"💰 {symbol} сейчас: `${price:,.4f}`\n\nВведите целевую цену (target price), например: `90000`",
+                    f"💰 {symbol} հիմա՝ `${price:,.4f}`\n\nՄուտքագրեք թիրախ գինը, օրինակ՝ `90000`",
                     parse_mode='Markdown'
                 )
             except:
-                await update.message.reply_text("Введите целевую цену (target price), например: `90000`", parse_mode='Markdown')
+                await update.message.reply_text("Մուտքագրեք թիրախ գինը, օրինակ՝ `90000`", parse_mode='Markdown')
 
         elif step == 'price':
             try:
@@ -69,16 +69,17 @@ class AlertHandler:
                 context.user_data['waiting_alert_price'] = False
                 context.user_data['alert_step'] = None
                 current = bc.get_price(symbol)
-                direction = "⬆️ Выше" if price > current else "⬇️ Ниже"
+                direction = "⬆️ Վեր" if price > current else "⬇️ Ներք"
                 await update.message.reply_text(
-                    f"✅ *Уведомление создано!*\n\n"
+                    f"✅ *Ծանուցումը Ստեղծված է!*\n\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
                     f"🔔 `{symbol}` → `${price:,.4f}`\n"
-                    f"💰 Сейчас: `${current:,.4f}`\n"
-                    f"📍 Сработает: {direction} цели",
+                    f"💰 Հիմա՝ `${current:,.4f}`\n"
+                    f"📍 Կգործի՝ {direction} թիրախից",
                     parse_mode='Markdown'
                 )
             except ValueError:
-                await update.message.reply_text("❌ Ошибка. Введите число, например: `90000`", parse_mode='Markdown')
+                await update.message.reply_text("❌ Սխալ։ Մուտքագրեք թիվ, օրինակ՝ `90000`", parse_mode='Markdown')
 
     async def set_price_alert(self, update: Update, context, symbol, price):
         if not symbol.endswith("USDT"):
@@ -93,7 +94,7 @@ class AlertHandler:
             'last_price': None
         })
         await update.message.reply_text(
-            f"✅ *Уведомление создано!*\n🔔 `{symbol}` → `${price:,.2f}`",
+            f"✅ *Ծանուցումը Ստեղծված է!*\n\n🔔 `{symbol}` → `${price:,.2f}`",
             parse_mode='Markdown'
         )
 
@@ -102,14 +103,14 @@ class AlertHandler:
         user_id = query.from_user.id
         my = [a for a in alerts if a.get('user_id') == user_id and a.get('active')]
         if not my:
-            text = "📜 *Мои уведомления*\n\nАктивных уведомлений нет."
+            text = "📜 *Իմ Ծանուցումները*\n\n━━━━━━━━━━━━━━━━━━\nԱկտիվ ծանուցումներ չկան։"
         else:
-            text = f"📜 *Мои уведомления ({len(my)})*\n\n"
+            text = f"📜 *Իմ Ծանուցումները ({len(my)})*\n\n━━━━━━━━━━━━━━━━━━\n"
             for a in my:
                 text += f"#{a['id']} 🔔 `{a['symbol']}` → `${a['target_price']:,.4f}`\n"
         kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Удалить все", callback_data="alert_clear"),
-            InlineKeyboardButton("🔙 Назад", callback_data="menu_alerts")
+            InlineKeyboardButton("❌ Ջնջել Բոլորը", callback_data="alert_clear"),
+            InlineKeyboardButton("🔙 Հետ", callback_data="menu_alerts")
         ]])
         await query.edit_message_text(text, reply_markup=kb, parse_mode='Markdown')
 
@@ -118,6 +119,6 @@ class AlertHandler:
         alerts = get_alerts(context)
         context.bot_data[ALERTS_KEY] = [a for a in alerts if a.get('user_id') != user_id]
         await query.edit_message_text(
-            "✅ Все уведомления удалены.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="menu_alerts")]])
+            "✅ Բոլոր ծանուցումները ջնջված են։",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Հետ", callback_data="menu_alerts")]])
         )
