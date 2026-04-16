@@ -1,21 +1,39 @@
 services:
   - type: web
-    name: binance-telegram-bot
-    runtime: python
+    name: binance-trading-bot
+    env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_SECRET_KEY
         sync: false
-      - key: TELEGRAM_BOT_TOKEN
+      - key: ALLOWED_USERS
         sync: false
-      - key: ALLOWED_USER_IDS
-        value: "123456789,987654321"
+      - key: DEFAULT_SYMBOL
+        value: BTCUSDT
       - key: MAX_TRADE_SIZE_USD
-        value: "500"
+        value: "100"
       - key: DAILY_LOSS_LIMIT_USD
-        value: "1000"
-      - key: READ_ONLY_MODE
-        value: "False"
+        value: "50"
+      - key: READ_ONLY
+        value: "false"
+      - key: RSI_PERIOD
+        value: "14"
+      - key: RSI_OVERSOLD
+        value: "30"
+      - key: RSI_OVERBOUGHT
+        value: "70"
+      - key: MA_FAST
+        value: "9"
+      - key: MA_SLOW
+        value: "21"
+      - key: ALERT_CHECK_INTERVAL
+        value: "60"
+      - key: STRATEGY_CHECK_INTERVAL
+        value: "300"
+      - key: FUTURES_LEVERAGE
+        value: "1"
