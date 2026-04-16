@@ -8,14 +8,27 @@ class TechnicalAnalysis:
     def __init__(self):
         self.client = BinanceClient()
     
-    def get_rsi(self, symbol="BTCUSDT", period=14):
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Ensure symbol is uppercase and has USDT quote"""
+        symbol = symbol.upper().replace("/", "").replace(" ", "")
+        if not symbol.endswith("USDT"):
+            symbol += "USDT"
+        return symbol
+    
+    def get_rsi(self, symbol="BTCUSDT", period=None):
+        symbol = self._normalize_symbol(symbol)
+        if period is None:
+            period = config.RSI_PERIOD
         klines = self.client.get_klines(symbol, limit=period+1)
         df = pd.DataFrame(klines, columns=['time','open','high','low','close','volume','close_time','quote_asset_volume','number_of_trades','taker_buy_base','taker_buy_quote','ignore'])
         df['close'] = df['close'].astype(float)
         rsi = ta.momentum.RSIIndicator(close=df['close'], window=period).rsi().iloc[-1]
         return round(rsi, 2)
     
-    def get_ma(self, symbol="BTCUSDT", window=14):
+    def get_ma(self, symbol="BTCUSDT", window=None):
+        symbol = self._normalize_symbol(symbol)
+        if window is None:
+            window = config.MA_SHORT
         klines = self.client.get_klines(symbol, limit=window+1)
         df = pd.DataFrame(klines, columns=['time','open','high','low','close','volume','close_time','quote_asset_volume','number_of_trades','taker_buy_base','taker_buy_quote','ignore'])
         df['close'] = df['close'].astype(float)
@@ -23,6 +36,7 @@ class TechnicalAnalysis:
         return round(ma, 2)
     
     def rsi_ma_signal(self, symbol="BTCUSDT"):
+        symbol = self._normalize_symbol(symbol)
         rsi = self.get_rsi(symbol, config.RSI_PERIOD)
         ma_short = self.get_ma(symbol, config.MA_SHORT)
         ma_long = self.get_ma(symbol, config.MA_LONG)
