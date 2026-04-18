@@ -320,11 +320,67 @@ def fear_and_greed() -> dict:
 #  PORTFOLIO
 # ══════════════════════════════════════════════════════════════
 def portfolio_text(uid: int) -> str:
+    """Show Binance real balances + current prices as portfolio."""
+    lines = ["💼 *ПОРТФЕЛЬ (Binance)*\n"]
+    ti = tc = 0.0
+
+    # Try real Binance balances first
+    if bc:
+        try:
+            acc = bc.get_account()
+            assets = [(b["asset"], float(b["free"]) + float(b["locked"]))
+                      for b in acc["balances"]
+                      if float(b["free"]) + float(b["locked"]) > 0.000001]
+            if not assets:
+                return "📂 Binance баланс пуст."
+
+            for asset, qty in sorted(assets, key=lambda x: -x[1]):
+                if asset == "USDT":
+                    lines.append(f"💵 *USDT*: `${qty:.4f}`")
+                    tc += qty
+                    continue
+                # Try to get price
+                ticker = get_price(asset)
+                if "error" in ticker:
+                    lines.append(f"⚪ *{asset}*: `{qty:.6f}` (нет цены)")
+                    continue
+                p = ticker["price"]
+                val = qty * p
+                tc += val
+                # Check if we have avg price in local portfolio
+                sym_str = asset + "USDT"
+                local = USER_DATA[uid]["portfolio"].get(sym_str)
+                if local and local.get("avg_price"):
+                    avg = local["avg_price"]
+                    inv = qty * avg; pnl = val - inv
+                    pct = pnl / inv * 100 if inv else 0
+                    ti += inv
+                    e = "🟢" if pnl >= 0 else "🔴"
+                    lines.append(
+                        f"{e} *{asset}*: `{qty:.6f}`\n"
+                        f"   Цена `${p:.4f}` | Стоим. `${val:.2f}`\n"
+                        f"   PnL `{'+' if pnl>=0 else ''}{pnl:.2f}$` ({pct:+.1f}%)\n"
+                    )
+                else:
+                    e = "💠"
+                    lines.append(
+                        f"{e} *{asset}*: `{qty:.6f}`\n"
+                        f"   Цена `${p:.4f}` | Стоим. `${val:.2f}`\n"
+                    )
+
+            lines.append("─────────────────")
+            lines.append(f"💎 *Общая стоимость:* `${tc:.2f} USDT`")
+            if ti > 0:
+                tp = tc - ti; te = "🟢" if tp >= 0 else "🔴"
+                lines.append(f"{te} *PnL:* `{'+' if tp>=0 else ''}{tp:.2f}$` ({(tp/ti*100):+.1f}%)")
+            return "\n".join(lines)
+        except Exception as e:
+            lines.append(f"❌ Binance error: {e}")
+
+    # Fallback to local portfolio
     port = USER_DATA[uid]["portfolio"]
     if not port:
         return "📂 Портфель пуст.\nСначала совершите сделку."
-    lines = ["💼 *ПОРТФЕЛЬ*\n"]
-    ti = tc = 0.0
     for s, pos in port.items():
         t = get_price(s)
         if "error" in t: continue
@@ -833,27 +889,96 @@ async def cmd_portfolio(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
         portfolio_text(uid), parse_mode=ParseMode.MARKDOWN, reply_markup=back_kb())
 
 async def cmd_orders(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
-    uid=update.effective_user.id
-    orders=USER_DATA[uid]["orders"]
+    uid = update.effective_user.id
+
+    # Try Binance real trade history
+    if bc:
+        try:
+            lines = ["📖 *История сделок Binance*\n"]
+            found = False
+            for coin in TOP_COINS[:8]:
+                s = sym(coin)
+                try:
+                    trades = bc.get_my_trades(symbol=s, limit=3)
+                    for t in reversed(trades):
+                        found = True
+                        side = "BUY" if t["isBuyer"] else "SELL"
+                        e = "🟢" if side == "BUY" else "🔴"
+                        dt = datetime.fromtimestamp(t["time"]/1000).strftime("%m-%d %H:%M")
+                        qty = float(t["qty"])
+                        price = float(t["price"])
+                        total = qty * price
+                        lines.append(
+                            f"{e} `{dt}` *{s}*\n"
+                            f"   {side} `{qty:.6f}` @ `${price:.4f}` = `${total:.2f}`\n"
+                        )
+                except:
+                    continue
+
+            if found:
+                await update.message.reply_text(
+                    "\n".join(lines[:30]), parse_mode=ParseMode.MARKDOWN)
+                return
+            else:
+                # No trades on Binance, show local
+                pass
+        except Exception as e:
+            pass
+
+    # Fallback: local bot orders
+    orders = USER_DATA[uid]["orders"]
     if not orders:
-        await update.message.reply_text("📭 Нет сделок."); return
-    lines=["📖 *История сделок*\n"]
+        await update.message.reply_text(
+            "📭 *Нет сделок*\n\n"
+            "История сделок Binance пуста и в боте сделок нет.\n"
+            "Пополните баланс USDT и совершите первую сделку!",
+            parse_mode=ParseMode.MARKDOWN)
+        return
+    lines = ["📖 *История сделок (бот)*\n"]
     for o in orders[:10]:
-        e="🟢" if o["side"]=="BUY" else "🔴"
-        tl=TRADE_TYPES.get(o.get("type","spot"),"")
+        e = "🟢" if o["side"] == "BUY" else "🔴"
+        tl = TRADE_TYPES.get(o.get("type","spot"),"")
         lines.append(
             f"{e} `{o['time']}` *{o['symbol']}* {tl}\n"
             f"   {o['side']} `{o['qty']:.6f}` @ `${o['price']:.4f}` = `${o['total']:.2f}`\n")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_balance(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
-    bal=get_account_balance()
+    bal = get_account_balance()
     if not bal["ok"]:
         await update.message.reply_text(f"❌ {bal['error']}"); return
-    mt=" _(Демо)_" if bal.get("mock") else ""
-    lines=[f"💳 *Баланс Binance*{mt}\n"]
-    for asset,qty in sorted(bal["balances"].items(), key=lambda x:-x[1])[:15]:
-        lines.append(f"  • *{asset}*: `{qty:.6f}`")
+    mt = " _(Демо)_" if bal.get("mock") else (" _(Testnet)_" if USE_TESTNET else "")
+    lines = [f"💳 *Баланс Binance*{mt}\n"]
+    total_usdt = 0.0
+    usdt_bal = bal["balances"].get("USDT", 0)
+
+    # Show USDT first
+    if usdt_bal > 0:
+        lines.append(f"💵 *USDT*: `${usdt_bal:.4f}`")
+        total_usdt += usdt_bal
+
+    # Show other assets with USD value
+    for asset, qty in sorted(bal["balances"].items(), key=lambda x: -x[1]):
+        if asset == "USDT": continue
+        ticker = get_price(asset)
+        if "error" not in ticker:
+            usd_val = qty * ticker["price"]
+            total_usdt += usd_val
+            lines.append(f"  • *{asset}*: `{qty:.6f}` ≈ `${usd_val:.2f}`")
+        else:
+            lines.append(f"  • *{asset}*: `{qty:.6f}`")
+
+    lines.append("─────────────────")
+    lines.append(f"💎 *Итого ≈* `${total_usdt:.2f} USDT`")
+
+    # Trade ability check
+    if usdt_bal < 5:
+        lines.append(f"\n⚠️ *USDT меньше $5* — пополните для торговли")
+        lines.append(f"Минимальная сделка: `$5`")
+    else:
+        max_trade = int(usdt_bal / 5) * 5
+        lines.append(f"\n✅ Можно торговать до `${usdt_bal:.2f}`")
+
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_analysis(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
