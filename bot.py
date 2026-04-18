@@ -484,6 +484,13 @@ def alert_coin_kb():
     rows.append([InlineKeyboardButton("🔙 Назад", callback_data="m_alerts_menu")])
     return InlineKeyboardMarkup(rows)
 
+def alert_condition_kb(coin: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"⬆️ Выше (above)", callback_data=f"alert_cond_{coin}_above"),
+         InlineKeyboardButton(f"⬇️ Ниже (below)", callback_data=f"alert_cond_{coin}_below")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="alert_add")],
+    ])
+
 def alerts_menu_kb(uid: int):
     alerts = USER_DATA[uid]["alerts"]
     rows = [
@@ -1221,14 +1228,29 @@ async def callback_handler(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
             "🔔 *Добавить алерт — Выберите монету:*",
             parse_mode=ParseMode.MARKDOWN, reply_markup=alert_coin_kb())
 
-    elif d.startswith("alert_coin_"):
+    elif d.startswith("alert_coin_") and not d.startswith("alert_cond_"):
         coin=d.split("_")[2]
-        USER_DATA[uid]["waiting_alert_coin"]=coin
+        t=get_price(coin)
+        price=t.get("price",0)
         await q.edit_message_text(
-            f"🔔 *Алерт для {coin}USDT*\n\n"
-            f"Напишите условие, например:\n"
-            f"`above 70000` — цена выше\n"
-            f"`below 3000` — цена ниже",
+            f"🔔 *Алерт — {coin}USDT*\n"
+            f"Текущая цена: `${price:,.4f}`\n\n"
+            f"Выберите условие:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=alert_condition_kb(coin))
+
+    elif d.startswith("alert_cond_"):
+        parts=d.split("_")
+        coin=parts[2]; cond=parts[3]
+        USER_DATA[uid]["waiting_alert_coin"]={"coin": coin, "cond": cond}
+        cond_text="выше ⬆️" if cond=="above" else "ниже ⬇️"
+        t=get_price(coin)
+        price=t.get("price",0)
+        await q.edit_message_text(
+            f"🔔 *{coin}USDT — цена {cond_text}*\n"
+            f"Текущая цена: `${price:,.4f}`\n\n"
+            f"✏️ *Введите целевую цену:*\n"
+            f"Например: `{int(price*1.05)}`",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("❌ Отмена", callback_data="m_alerts_menu")]]))
@@ -1268,28 +1290,37 @@ async def full_text_handler(update:Update, ctx:ContextTypes.DEFAULT_TYPE):
     text=update.message.text.strip()
 
     # Alert condition input
-    waiting_coin=USER_DATA[uid].get("waiting_alert_coin")
-    if waiting_coin:
-        parts=text.lower().split()
-        if len(parts)>=2 and parts[0] in ("above","below","выше","ниже"):
-            cond="above" if parts[0] in ("above","выше") else "below"
-            try:
-                price=float(parts[1].replace(",","."))
-                USER_DATA[uid]["alerts"].append(
-                    {"symbol":sym(waiting_coin),"condition":cond,
-                     "price":price,"chat_id":update.effective_chat.id})
-                USER_DATA[uid]["waiting_alert_coin"]=None
-                e="⬆️" if cond=="above" else "⬇️"
-                await update.message.reply_text(
-                    f"✅ Алерт установлен!\n*{sym(waiting_coin)}* {e} `${price:,.2f}`",
-                    parse_mode=ParseMode.MARKDOWN,
-                    reply_markup=back_kb("m_alerts_menu"))
-                return
-            except: pass
-        await update.message.reply_text(
-            "❌ Формат: `above 70000` или `below 3000`",
-            parse_mode=ParseMode.MARKDOWN)
-        return
+    waiting_alert=USER_DATA[uid].get("waiting_alert_coin")
+    if waiting_alert:
+        # Now waiting_alert is a dict: {"coin": ..., "cond": ...}
+        if isinstance(waiting_alert, dict):
+            coin_a=waiting_alert["coin"]
+            cond=waiting_alert["cond"]
+        else:
+            # legacy fallback
+            coin_a=waiting_alert; cond="above"
+        try:
+            price_a=float(text.replace("$","").replace(",",".").replace(" ",""))
+            if price_a<=0: raise ValueError
+            USER_DATA[uid]["alerts"].append(
+                {"symbol":sym(coin_a),"condition":cond,
+                 "price":price_a,"chat_id":update.effective_chat.id})
+            USER_DATA[uid]["waiting_alert_coin"]=None
+            e="⬆️" if cond=="above" else "⬇️"
+            await update.message.reply_text(
+                f"✅ *Алерт установлен!*\n\n"
+                f"Монета: *{sym(coin_a)}*\n"
+                f"Условие: {e} `${price_a:,.2f}`\n\n"
+                f"_Уведомление придёт когда цена достигнет цели_",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=alerts_menu_kb(uid))
+            return
+        except:
+            t_now=get_price(coin_a)
+            await update.message.reply_text(
+                f"❌ Введите только число!\nПример: `{int(t_now.get('price',1000)*1.05)}`",
+                parse_mode=ParseMode.MARKDOWN)
+            return
 
     # Custom amount input
     waiting_amount=USER_DATA[uid].get("waiting_custom_amount")
