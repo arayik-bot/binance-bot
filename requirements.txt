@@ -1,5 +1,2 @@
 python-telegram-bot[job-queue]==21.9
 python-binance==1.0.19
-matplotlib==3.9.4
-Pillow==11.2.1
-numpy==2.2.5
