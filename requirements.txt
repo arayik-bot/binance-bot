@@ -1,2 +1,6 @@
 python-telegram-bot[job-queue]==21.9
 python-binance==1.0.19
+matplotlib==3.8.2
+mplfinance==0.12.10b0
+Pillow==10.2.0
+numpy==1.26.4
