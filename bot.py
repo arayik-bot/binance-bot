@@ -9,7 +9,6 @@ from collections import defaultdict
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import numpy as np
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
