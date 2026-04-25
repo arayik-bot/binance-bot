@@ -23,16 +23,7 @@ try:
 except ImportError:
     BINANCE_OK = False
 
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    from matplotlib.gridspec import GridSpec
-    import matplotlib.dates as mdates
-    MPL_OK = True
-except ImportError:
-    MPL_OK = False
+MPL_OK = False  # Using chart links instead
 
 logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(message)s",
                     datefmt="%H:%M:%S", level=logging.INFO)
@@ -218,207 +209,16 @@ def place_order(coin, side, usdt_amount, trade_type="spot"):
 # ══════════════════════════════════════════════════════════════════
 #  CANDLESTICK CHART GENERATOR
 # ══════════════════════════════════════════════════════════════════
-def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
-    """Generate a beautiful candlestick chart and return as PNG bytes."""
-    if not MPL_OK:
-        return None
-    import sys
-    old_limit = sys.getrecursionlimit()
-    sys.setrecursionlimit(5000)
-    try:
-        klines = get_klines(coin, interval, limit)
-        dates  = [datetime.fromtimestamp(k[0]/1000) for k in klines]
-        opens  = [float(k[1]) for k in klines]
-        highs  = [float(k[2]) for k in klines]
-        lows   = [float(k[3]) for k in klines]
-        closes = [float(k[4]) for k in klines]
-        volumes= [float(k[5]) for k in klines]
+def get_chart_url(coin, interval="1h") -> str:
+    """Return Binance chart URL for the coin."""
+    s = sym(coin)
+    return f"https://www.binance.com/en/trade/{s}?type=spot&interval={interval}"
 
-        # Colors
-        BG       = "#0d1117"
-        GRID     = "#21262d"
-        BULL_C   = "#26a69a"   # green candle
-        BEAR_C   = "#ef5350"   # red candle
-        VOL_BULL = "#1a6b66"
-        VOL_BEAR = "#8b2020"
-        TEXT_C   = "#c9d1d9"
-        LINE_C   = "#f0b90b"   # EMA line (yellow)
-        BB_C     = "#58a6ff"   # Bollinger
-
-        fig, (ax1, ax2, ax3, ax4) = plt.subplots(
-            4, 1, figsize=(12, 8),
-            gridspec_kw={"height_ratios":[3,1,0.8,0.8],"hspace":0.05},
-            facecolor=BG)
-        fig.patch.set_facecolor(BG)
-
-        for ax in [ax1,ax2,ax3,ax4]:
-            ax.set_facecolor(BG)
-            ax.tick_params(colors=TEXT_C, labelsize=8)
-            ax.yaxis.tick_right()
-            ax.grid(color=GRID, linewidth=0.5, alpha=0.7)
-            for spine in ax.spines.values():
-                spine.set_edgecolor(GRID)
-
-        x = np.arange(len(dates))
-
-        # ── CANDLES ───────────────────────────────────────────────
-        width = 0.6
-        for i in range(len(x)):
-            bull = closes[i] >= opens[i]
-            color = BULL_C if bull else BEAR_C
-            # Body
-            body_bot = min(opens[i], closes[i])
-            body_h   = abs(closes[i] - opens[i]) or (closes[i] * 0.001)
-            ax1.bar(x[i], body_h, bottom=body_bot, width=width,
-                    color=color, linewidth=0)
-            # Wick
-            ax1.plot([x[i], x[i]], [lows[i], highs[i]],
-                     color=color, linewidth=0.8)
-
-        # ── EMA 20 ────────────────────────────────────────────────
-        def chart_ema(prices, n):
-            if len(prices) < n:
-                return [None]*len(prices)
-            k=2/(n+1); r=[sum(prices[:n])/n]
-            for p in prices[n:]: r.append(p*k+r[-1]*(1-k))
-            return [None]*(n-1)+r
-
-        ema20 = chart_ema(closes, 20)
-        ema50 = chart_ema(closes, 50)
-        e20_x = [x[i] for i in range(len(x)) if ema20[i] is not None]
-        e20_y = [v for v in ema20 if v is not None]
-        e50_x = [x[i] for i in range(len(x)) if ema50[i] is not None]
-        e50_y = [v for v in ema50 if v is not None]
-        ax1.plot(e20_x, e20_y, color=LINE_C,  linewidth=1.2, label="EMA20")
-        ax1.plot(e50_x, e50_y, color="#ff7b00",linewidth=1.2, label="EMA50")
-
-        # ── BOLLINGER BANDS ───────────────────────────────────────
-        if len(closes) >= 20:
-            bb_mid, bb_u, bb_l = [], [], []
-            for i in range(len(closes)):
-                if i < 19:
-                    bb_mid.append(None); bb_u.append(None); bb_l.append(None)
-                else:
-                    sl = closes[i-19:i+1]
-                    m = sum(sl)/20
-                    s = math.sqrt(sum((c-m)**2 for c in sl)/20)
-                    bb_mid.append(m); bb_u.append(m+2*s); bb_l.append(m-2*s)
-            bx  = [x[i] for i in range(len(x)) if bb_mid[i] is not None]
-            bmu = [v for v in bb_u  if v is not None]
-            bml = [v for v in bb_l  if v is not None]
-            ax1.plot(bx, bmu, color=BB_C, linewidth=0.8, linestyle="--", alpha=0.7)
-            ax1.plot(bx, bml, color=BB_C, linewidth=0.8, linestyle="--", alpha=0.7)
-            ax1.fill_between(bx, bmu, bml, color=BB_C, alpha=0.04)
-
-        # Title & legend
-        last    = closes[-1]
-        chg     = ((last-closes[0])/closes[0]*100) if closes[0] else 0
-        chg_clr = BULL_C if chg >= 0 else BEAR_C
-        ax1.set_title(f"{sym(coin)}  {interval}  |  ${last:,.4f}  "
-                      f"{'▲' if chg>=0 else '▼'}{abs(chg):.2f}%",
-                      color=TEXT_C, fontsize=13, fontweight="bold", pad=10)
-        ax1.legend(loc="upper left", fontsize=8,
-                   facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C)
-        ax1.set_xlim(-1, len(x))
-
-        # ── VOLUME ────────────────────────────────────────────────
-        for i in range(len(x)):
-            bull = closes[i] >= opens[i]
-            ax2.bar(x[i], volumes[i], color=VOL_BULL if bull else VOL_BEAR,
-                    linewidth=0, alpha=0.8)
-        ax2.set_ylabel("Vol", color=TEXT_C, fontsize=8)
-
-        # ── MACD ──────────────────────────────────────────────────
-        def calc_macd(p):
-            e12=chart_ema(p,12); e26=chart_ema(p,26)
-            ml=[]
-            for i in range(len(p)):
-                if e12[i] and e26[i]: ml.append(e12[i]-e26[i])
-                else: ml.append(None)
-            valid=[v for v in ml if v is not None]
-            if len(valid)>=9:
-                se=chart_ema(valid,9)
-                pad=[None]*(len(ml)-len(se))
-                se=pad+se
-            else:
-                se=[None]*len(ml)
-            hist=[]
-            for i in range(len(ml)):
-                if ml[i] and se[i]: hist.append(ml[i]-se[i])
-                else: hist.append(None)
-            return ml,se,hist
-
-        ml,sl,hist=calc_macd(closes)
-        mx=[x[i] for i in range(len(x)) if ml[i] is not None]
-        my=[v for v in ml if v is not None]
-        sy=[v for v in sl if v is not None]
-        hy=[v for v in hist if v is not None]
-        hx=[x[i] for i in range(len(x)) if hist[i] is not None]
-        ax3.plot(mx,my,color=LINE_C,linewidth=1)
-        ax3.plot(mx[-len(sy):],sy,color="#ff7b00",linewidth=1)
-        for i in range(len(hx)):
-            ax3.bar(hx[i],hy[i],color=BULL_C if hy[i]>=0 else BEAR_C,
-                    linewidth=0,alpha=0.8)
-        ax3.axhline(0,color=GRID,linewidth=0.5)
-        ax3.set_ylabel("MACD",color=TEXT_C,fontsize=8)
-
-        # ── RSI ───────────────────────────────────────────────────
-        def calc_rsi(p,n=14):
-            result=[None]*n
-            for i in range(n,len(p)):
-                sl2=p[i-n:i]
-                g=[max(sl2[j]-sl2[j-1],0) for j in range(1,len(sl2))]
-                lo=[max(sl2[j-1]-sl2[j],0) for j in range(1,len(sl2))]
-                ag=sum(g)/n; al=sum(lo)/n
-                result.append(100-100/(1+ag/al) if al else 100)
-            return result
-
-        rsi=calc_rsi(closes)
-        rx=[x[i] for i in range(len(x)) if rsi[i] is not None]
-        ry=[v for v in rsi if v is not None]
-        ax4.plot(rx,ry,color="#a78bfa",linewidth=1.2)
-        ax4.axhline(70,color=BEAR_C,linewidth=0.8,linestyle="--",alpha=0.7)
-        ax4.axhline(30,color=BULL_C,linewidth=0.8,linestyle="--",alpha=0.7)
-        ax4.fill_between(rx,ry,70,where=[v>=70 for v in ry],
-                         color=BEAR_C,alpha=0.15)
-        ax4.fill_between(rx,ry,30,where=[v<=30 for v in ry],
-                         color=BULL_C,alpha=0.15)
-        ax4.set_ylim(0,100)
-        ax4.set_ylabel("RSI",color=TEXT_C,fontsize=8)
-        ax4.set_yticks([30,50,70])
-
-        # X axis labels (show only last few)
-        tick_step = max(1, len(x)//8)
-        ax4.set_xticks(x[::tick_step])
-        fmt = "%H:%M" if interval in ("15m","1h") else "%m/%d"
-        ax4.set_xticklabels(
-            [dates[i].strftime(fmt) for i in range(0,len(dates),tick_step)],
-            color=TEXT_C, fontsize=7)
-        plt.setp(ax1.get_xticklabels(), visible=False)
-        plt.setp(ax2.get_xticklabels(), visible=False)
-        plt.setp(ax3.get_xticklabels(), visible=False)
-
-        plt.tight_layout(pad=1.0)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
-                    facecolor=BG)
-        plt.close(fig)
-        buf.seek(0)
-        data = buf.read()
-        sys.setrecursionlimit(old_limit)
-        return data
-
-    except Exception as e:
-        import traceback, sys
-        log.error(f"Chart error: {e}")
-        log.error(traceback.format_exc())
-        try:
-            plt.close("all")
-            sys.setrecursionlimit(old_limit)
-        except:
-            pass
-        return None
+def get_chart_image_url(coin, interval="1h") -> str:
+    """Return TradingView widget URL."""
+    s = sym(coin)
+    base = coin.upper()
+    return f"https://s3.tradingview.com/snapshots/{base.lower()[:1]}/{base}USDT.png"
 
 # ── TECHNICAL ANALYSIS ────────────────────────────────────────────
 def compute_ta(coin, interval="1h"):
@@ -841,23 +641,18 @@ async def cmd_price(u,c):
 async def cmd_chart(u,c):
     args=c.args; coin=(args[0] if args else "BTC").upper()
     iv=args[1] if len(args)>1 else "1h"
-    msg=await u.message.reply_text(f"⏳ Генерация графика {coin} [{iv}]...")
-    img=generate_chart(coin,iv,60)
-    await msg.delete()
-    if img:
-        await u.message.reply_photo(
-            photo=img,
-            caption=f"📉 *{coin}USDT* [{iv}]",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=chart_iv_kb(coin))
-    else:
-        ta = compute_ta(coin)
-        t  = get_price(coin)
-        await u.message.reply_text(
-            ta_text(coin, t.get("price",0), ta, iv) +
-            "\n\n_⚠️ График временно недоступен_",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=chart_iv_kb(coin))
+    ta=compute_ta(coin); t=get_price(coin); p=t.get("price",0)
+    url=get_chart_url(coin,iv)
+    tv_url=f"https://www.tradingview.com/chart/?symbol=BINANCE%3A{sym(coin)}&interval={iv}"
+    txt = (f"📉 *{coin}USDT* [{iv}]\n"
+            f"💵 Цена: `${p:,.4f}`\n\n"
+            f"🎯 Сигнал: {ta['signal']}\n"
+            f"📉 RSI: `{ta['rsi']}`\n"
+            f"📊 MACD hist: `{ta['hist']}`\n\n"
+            f"📈 [Открыть на Binance]({url})\n"
+            f"📊 [Открыть на TradingView]({tv_url})")
+    await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN,
+        reply_markup=chart_iv_kb(coin), disable_web_page_preview=False)
 
 async def cmd_portfolio(u,c):
     uid=u.effective_user.id
@@ -1055,24 +850,18 @@ async def cb(u,c):
                                    parse_mode=ParseMode.MARKDOWN,reply_markup=chart_iv_kb(coin))
     elif d.startswith("chrt__"):
         parts=d.split("__"); coin=parts[1]; iv=parts[2]
-        await q.edit_message_text(f"⏳ Генерация графика {coin} [{iv}]...")
-        img=generate_chart(coin,iv,60)
-        chat_id=u.effective_chat.id
-        if img:
-            await q.delete_message()
-            await c.bot.send_photo(
-                chat_id=chat_id,photo=img,
-                caption=f"📉 *{coin}USDT* [{iv}]  |  EMA20/50 + BB + MACD + RSI",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=chart_iv_kb(coin))
-        else:
-            ta = compute_ta(coin)
-            t  = get_price(coin)
-            await q.edit_message_text(
-                ta_text(coin, t.get("price",0), ta, iv) +
-                "\n\n_⚠️ График временно недоступен_",
-                parse_mode=ParseMode.MARKDOWN,
-                reply_markup=chart_iv_kb(coin))
+        ta=compute_ta(coin); t=get_price(coin); p=t.get("price",0)
+        url=get_chart_url(coin,iv)
+        tv_url=f"https://www.tradingview.com/chart/?symbol=BINANCE%3A{sym(coin)}&interval={iv}"
+        txt = (f"📉 *{coin}USDT* [{iv}]\n"
+                f"💵 Цена: `${p:,.4f}`\n\n"
+                f"🎯 Сигнал: {ta['signal']}\n"
+                f"📉 RSI: `{ta['rsi']}`\n"
+                f"📊 MACD hist: `{ta['hist']}`\n\n"
+                f"📈 [Открыть на Binance]({url})\n"
+                f"📊 [Открыть на TradingView]({tv_url})")
+        await q.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN,
+            reply_markup=chart_iv_kb(coin), disable_web_page_preview=False)
 
     # ANALYSIS
     elif d=="m_analysis":
