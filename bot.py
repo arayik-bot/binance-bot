@@ -1,13 +1,15 @@
 """
-BINANCE PRO TRADING BOT v5.0
-Русский интерфейс | LOT_SIZE fix | Chart fix | Real Portfolio
+BINANCE PRO TRADING BOT v6.0
+Русский интерфейс | Candlestick Charts | LOT_SIZE fix | Real Portfolio
 """
-import os, asyncio, logging, time, math, random
+import os, asyncio, logging, time, math, random, io
 from datetime import datetime
 from typing import Optional
 from collections import defaultdict
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+import numpy as np
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (Application, CommandHandler, CallbackQueryHandler,
@@ -20,6 +22,17 @@ try:
     BINANCE_OK = True
 except ImportError:
     BINANCE_OK = False
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.gridspec import GridSpec
+    import matplotlib.dates as mdates
+    MPL_OK = True
+except ImportError:
+    MPL_OK = False
 
 logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(message)s",
                     datefmt="%H:%M:%S", level=logging.INFO)
@@ -68,7 +81,6 @@ def sym(coin):
 _lot_cache = {}
 
 def get_lot_size(symbol):
-    """Get stepSize and minQty for a symbol from Binance exchange info."""
     if symbol in _lot_cache:
         return _lot_cache[symbol]
     if bc:
@@ -82,23 +94,20 @@ def get_lot_size(symbol):
                     return step, minq
         except:
             pass
-    return 0.00001, 0.00001  # safe default
+    return 0.00001, 0.00001
 
 def round_qty(qty, step):
-    """Round quantity to exchange step size."""
-    if step <= 0:
-        return qty
+    if step <= 0: return qty
     precision = max(0, round(-math.log10(step)))
     factor = 10 ** precision
     return math.floor(qty * factor) / factor
 
 def get_min_notional(symbol):
-    """Get minimum order value in USDT."""
     if bc:
         try:
             info = bc.get_symbol_info(symbol)
             for f in info["filters"]:
-                if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
+                if f["filterType"] in ("MIN_NOTIONAL","NOTIONAL"):
                     return float(f.get("minNotional", f.get("notional", 5)))
         except:
             pass
@@ -121,7 +130,7 @@ def get_price(coin):
             "high":round(base*1.04,6),"low":round(base*0.96,6),
             "volume":round(random.uniform(5000,500000),2)}
 
-def get_klines(coin, interval="1h", limit=30):
+def get_klines(coin, interval="1h", limit=60):
     s = sym(coin)
     if bc:
         try:
@@ -149,8 +158,7 @@ def get_real_balance():
     return {"USDT":1000.0,"BTC":0.01,"ETH":0.5,"_mock":True}
 
 def get_real_trades():
-    if not bc:
-        return []
+    if not bc: return []
     all_trades=[]
     for coin in TOP_COINS:
         s=sym(coin)
@@ -158,75 +166,249 @@ def get_real_trades():
             trades=bc.get_my_trades(symbol=s, limit=5)
             for t in trades:
                 all_trades.append({
-                    "time": datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
+                    "time":datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
                     "symbol":s,"side":"BUY" if t["isBuyer"] else "SELL",
                     "qty":float(t["qty"]),"price":float(t["price"]),
                     "total":float(t["qty"])*float(t["price"]),"ts":t["time"]})
-        except:
-            continue
+        except: continue
     all_trades.sort(key=lambda x:x["ts"],reverse=True)
     return all_trades
 
-# ── PLACE ORDER (with LOT_SIZE fix) ───────────────────────────────
 def place_order(coin, side, usdt_amount, trade_type="spot"):
     s = sym(coin)
     ticker = get_price(coin)
     if "error" in ticker:
         return {"ok":False,"error":ticker["error"]}
     price = ticker["price"]
-
-    # Check minimum notional
     min_notional = get_min_notional(s)
     if usdt_amount < min_notional:
-        return {"ok":False,"error":f"Минимальная сумма ордера: ${min_notional}"}
-
-    # Calculate and round quantity
+        return {"ok":False,"error":f"Минимальная сумма: ${min_notional}"}
     raw_qty = usdt_amount / price
     step, min_qty = get_lot_size(s)
     qty = round_qty(raw_qty, step)
-
     if qty < min_qty:
-        return {"ok":False,"error":f"Количество {qty} меньше минимума {min_qty}"}
-
+        return {"ok":False,"error":f"Кол-во {qty} меньше минимума {min_qty}"}
     if bc:
         try:
             if trade_type == "futures":
-                if side == "BUY":
-                    order = bc.futures_create_order(symbol=s,side="BUY",
-                                type="MARKET",quoteOrderQty=usdt_amount)
-                else:
-                    order = bc.futures_create_order(symbol=s,side="SELL",
-                                type="MARKET",quantity=str(qty))
+                order = bc.futures_create_order(symbol=s,side=side,type="MARKET",
+                    quoteOrderQty=usdt_amount) if side=="BUY" else \
+                    bc.futures_create_order(symbol=s,side=side,type="MARKET",quantity=str(qty))
             elif trade_type == "margin":
-                if side == "BUY":
-                    order = bc.create_margin_order(symbol=s,side="BUY",
-                                type="MARKET",quoteOrderQty=usdt_amount)
-                else:
-                    order = bc.create_margin_order(symbol=s,side="SELL",
-                                type="MARKET",quantity=str(qty))
+                order = bc.create_margin_order(symbol=s,side=side,type="MARKET",
+                    quoteOrderQty=usdt_amount) if side=="BUY" else \
+                    bc.create_margin_order(symbol=s,side=side,type="MARKET",quantity=str(qty))
             else:
-                # SPOT — BUY with quoteOrderQty, SELL with rounded qty
-                if side == "BUY":
-                    order = bc.order_market_buy(symbol=s, quoteOrderQty=usdt_amount)
-                else:
-                    order = bc.order_market_sell(symbol=s, quantity=str(qty))
-
-            fills = order.get("fills",[{}])
-            fp = float(fills[0].get("price",price)) if fills else price
-            fq = float(order.get("executedQty",qty))
+                order = bc.order_market_buy(symbol=s,quoteOrderQty=usdt_amount) if side=="BUY" else \
+                        bc.order_market_sell(symbol=s,quantity=str(qty))
+            fills=order.get("fills",[{}])
+            fp=float(fills[0].get("price",price)) if fills else price
+            fq=float(order.get("executedQty",qty))
             return {"ok":True,"symbol":s,"side":side,"qty":fq,"price":fp,
                     "total":fq*fp,"orderId":order.get("orderId"),"type":trade_type,"mock":False}
         except BinanceAPIException as e:
             return {"ok":False,"error":f"Binance: {e.message}"}
         except Exception as e:
             return {"ok":False,"error":str(e)}
-
-    # Demo mode
-    ep = price*random.uniform(0.999,1.001)
-    eq = round_qty(usdt_amount/ep, step)
+    ep=price*random.uniform(0.999,1.001); eq=round_qty(usdt_amount/ep,step)
     return {"ok":True,"symbol":s,"side":side,"qty":eq,"price":round(ep,4),
             "total":round(usdt_amount,2),"orderId":f"DEMO-{int(time.time())}",
             "type":trade_type,"mock":True}
+
+# ══════════════════════════════════════════════════════════════════
+#  CANDLESTICK CHART GENERATOR
+# ══════════════════════════════════════════════════════════════════
+def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
+    """Generate a beautiful candlestick chart and return as PNG bytes."""
+    if not MPL_OK:
+        return None
+    try:
+        klines = get_klines(coin, interval, limit)
+        dates  = [datetime.fromtimestamp(k[0]/1000) for k in klines]
+        opens  = [float(k[1]) for k in klines]
+        highs  = [float(k[2]) for k in klines]
+        lows   = [float(k[3]) for k in klines]
+        closes = [float(k[4]) for k in klines]
+        volumes= [float(k[5]) for k in klines]
+
+        # Colors
+        BG       = "#0d1117"
+        GRID     = "#21262d"
+        BULL_C   = "#26a69a"   # green candle
+        BEAR_C   = "#ef5350"   # red candle
+        VOL_BULL = "#1a6b66"
+        VOL_BEAR = "#8b2020"
+        TEXT_C   = "#c9d1d9"
+        LINE_C   = "#f0b90b"   # EMA line (yellow)
+        BB_C     = "#58a6ff"   # Bollinger
+
+        fig = plt.figure(figsize=(12, 7), facecolor=BG)
+        gs  = GridSpec(4, 1, figure=fig, hspace=0.05,
+                       height_ratios=[3, 1, 0.8, 0.8])
+
+        ax1 = fig.add_subplot(gs[0])  # Price + candles
+        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Volume
+        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # MACD
+        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # RSI
+
+        for ax in [ax1,ax2,ax3,ax4]:
+            ax.set_facecolor(BG)
+            ax.tick_params(colors=TEXT_C, labelsize=8)
+            ax.yaxis.tick_right()
+            ax.grid(color=GRID, linewidth=0.5, alpha=0.7)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(GRID)
+
+        x = np.arange(len(dates))
+
+        # ── CANDLES ───────────────────────────────────────────────
+        width = 0.6
+        for i in range(len(x)):
+            bull = closes[i] >= opens[i]
+            color = BULL_C if bull else BEAR_C
+            # Body
+            body_bot = min(opens[i], closes[i])
+            body_h   = abs(closes[i] - opens[i]) or (closes[i] * 0.001)
+            ax1.bar(x[i], body_h, bottom=body_bot, width=width,
+                    color=color, linewidth=0)
+            # Wick
+            ax1.plot([x[i], x[i]], [lows[i], highs[i]],
+                     color=color, linewidth=0.8)
+
+        # ── EMA 20 ────────────────────────────────────────────────
+        def ema(prices, n):
+            k=2/(n+1); r=[sum(prices[:n])/n]
+            for p in prices[n:]: r.append(p*k+r[-1]*(1-k))
+            return [None]*(n-1)+r
+
+        ema20 = ema(closes, 20)
+        ema50 = ema(closes, 50)
+        e20_x = [x[i] for i in range(len(x)) if ema20[i] is not None]
+        e20_y = [v for v in ema20 if v is not None]
+        e50_x = [x[i] for i in range(len(x)) if ema50[i] is not None]
+        e50_y = [v for v in ema50 if v is not None]
+        ax1.plot(e20_x, e20_y, color=LINE_C,  linewidth=1.2, label="EMA20")
+        ax1.plot(e50_x, e50_y, color="#ff7b00",linewidth=1.2, label="EMA50")
+
+        # ── BOLLINGER BANDS ───────────────────────────────────────
+        if len(closes) >= 20:
+            bb_mid, bb_u, bb_l = [], [], []
+            for i in range(len(closes)):
+                if i < 19:
+                    bb_mid.append(None); bb_u.append(None); bb_l.append(None)
+                else:
+                    sl = closes[i-19:i+1]
+                    m = sum(sl)/20
+                    s = math.sqrt(sum((c-m)**2 for c in sl)/20)
+                    bb_mid.append(m); bb_u.append(m+2*s); bb_l.append(m-2*s)
+            bx  = [x[i] for i in range(len(x)) if bb_mid[i] is not None]
+            bmu = [v for v in bb_u  if v is not None]
+            bml = [v for v in bb_l  if v is not None]
+            ax1.plot(bx, bmu, color=BB_C, linewidth=0.8, linestyle="--", alpha=0.7)
+            ax1.plot(bx, bml, color=BB_C, linewidth=0.8, linestyle="--", alpha=0.7)
+            ax1.fill_between(bx, bmu, bml, color=BB_C, alpha=0.04)
+
+        # Title & legend
+        last    = closes[-1]
+        chg     = ((last-closes[0])/closes[0]*100) if closes[0] else 0
+        chg_clr = BULL_C if chg >= 0 else BEAR_C
+        ax1.set_title(f"{sym(coin)}  {interval}  |  ${last:,.4f}  "
+                      f"{'▲' if chg>=0 else '▼'}{abs(chg):.2f}%",
+                      color=TEXT_C, fontsize=13, fontweight="bold", pad=10)
+        ax1.legend(loc="upper left", fontsize=8,
+                   facecolor=BG, edgecolor=GRID, labelcolor=TEXT_C)
+        ax1.set_xlim(-1, len(x))
+
+        # ── VOLUME ────────────────────────────────────────────────
+        for i in range(len(x)):
+            bull = closes[i] >= opens[i]
+            ax2.bar(x[i], volumes[i], color=VOL_BULL if bull else VOL_BEAR,
+                    linewidth=0, alpha=0.8)
+        ax2.set_ylabel("Vol", color=TEXT_C, fontsize=8)
+
+        # ── MACD ──────────────────────────────────────────────────
+        def calc_macd(p):
+            e12=ema(p,12); e26=ema(p,26)
+            ml=[]; sl=[]
+            for i in range(len(p)):
+                if e12[i] and e26[i]: ml.append(e12[i]-e26[i])
+                else: ml.append(None)
+            valid=[v for v in ml if v is not None]
+            if len(valid)>=9:
+                se=ema(valid,9)
+                pad=[None]*(len(ml)-len(se))
+                se=pad+se
+            else:
+                se=[None]*len(ml)
+            hist=[]
+            for i in range(len(ml)):
+                if ml[i] and se[i]: hist.append(ml[i]-se[i])
+                else: hist.append(None)
+            return ml,se,hist
+
+        ml,sl,hist=calc_macd(closes)
+        mx=[x[i] for i in range(len(x)) if ml[i] is not None]
+        my=[v for v in ml if v is not None]
+        sy=[v for v in sl if v is not None]
+        hy=[v for v in hist if v is not None]
+        hx=[x[i] for i in range(len(x)) if hist[i] is not None]
+        ax3.plot(mx,my,color=LINE_C,linewidth=1)
+        ax3.plot(mx[-len(sy):],sy,color="#ff7b00",linewidth=1)
+        for i in range(len(hx)):
+            ax3.bar(hx[i],hy[i],color=BULL_C if hy[i]>=0 else BEAR_C,
+                    linewidth=0,alpha=0.8)
+        ax3.axhline(0,color=GRID,linewidth=0.5)
+        ax3.set_ylabel("MACD",color=TEXT_C,fontsize=8)
+
+        # ── RSI ───────────────────────────────────────────────────
+        def calc_rsi(p,n=14):
+            result=[None]*n
+            for i in range(n,len(p)):
+                sl2=p[i-n:i]
+                g=[max(sl2[j]-sl2[j-1],0) for j in range(1,len(sl2))]
+                lo=[max(sl2[j-1]-sl2[j],0) for j in range(1,len(sl2))]
+                ag=sum(g)/n; al=sum(lo)/n
+                result.append(100-100/(1+ag/al) if al else 100)
+            return result
+
+        rsi=calc_rsi(closes)
+        rx=[x[i] for i in range(len(x)) if rsi[i] is not None]
+        ry=[v for v in rsi if v is not None]
+        ax4.plot(rx,ry,color="#a78bfa",linewidth=1.2)
+        ax4.axhline(70,color=BEAR_C,linewidth=0.8,linestyle="--",alpha=0.7)
+        ax4.axhline(30,color=BULL_C,linewidth=0.8,linestyle="--",alpha=0.7)
+        ax4.fill_between(rx,ry,70,where=[v>=70 for v in ry],
+                         color=BEAR_C,alpha=0.15)
+        ax4.fill_between(rx,ry,30,where=[v<=30 for v in ry],
+                         color=BULL_C,alpha=0.15)
+        ax4.set_ylim(0,100)
+        ax4.set_ylabel("RSI",color=TEXT_C,fontsize=8)
+        ax4.set_yticks([30,50,70])
+
+        # X axis labels (show only last few)
+        tick_step = max(1, len(x)//8)
+        ax4.set_xticks(x[::tick_step])
+        fmt = "%H:%M" if interval in ("15m","1h") else "%m/%d"
+        ax4.set_xticklabels(
+            [dates[i].strftime(fmt) for i in range(0,len(dates),tick_step)],
+            color=TEXT_C, fontsize=7)
+        plt.setp(ax1.get_xticklabels(), visible=False)
+        plt.setp(ax2.get_xticklabels(), visible=False)
+        plt.setp(ax3.get_xticklabels(), visible=False)
+
+        plt.tight_layout(pad=1.0)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                    facecolor=BG)
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        log.error(f"Chart error: {e}")
+        plt.close("all")
+        return None
 
 # ── TECHNICAL ANALYSIS ────────────────────────────────────────────
 def compute_ta(coin, interval="1h"):
@@ -271,45 +453,20 @@ def compute_ta(coin, interval="1h"):
             "bb_u":round(sma+2*std,4),"bb_l":round(sma-2*std,4),"bb_m":round(sma,4),
             "ema12":round(e12[-1],4),"ema26":round(e26[-1],4)}
 
-def ascii_chart(coin, interval="1h", bars=28):
-    klines=get_klines(coin,interval,bars)
-    closes=[float(k[4]) for k in klines]; opens=[float(k[1]) for k in klines]
-    highs=[float(k[2]) for k in klines]; lows=[float(k[3]) for k in klines]
-    hi=max(highs); lo=min(lows); span=hi-lo or 1; rows=12; result=[]
-    for row in range(rows,-1,-1):
-        level=lo+span*row/rows; lb=f"{level:>9.2f}|"; line=""
-        for i in range(len(closes)):
-            bh=max(closes[i],opens[i]); bl=min(closes[i],opens[i])
-            bull=closes[i]>=opens[i]
-            ch=lo+span*(row+0.5)/rows; cl_=lo+span*(row-0.5)/rows
-            if bl<=ch and bh>=cl_: line+="#" if bull else "-"
-            elif lows[i]<=ch and highs[i]>=cl_: line+="|"
-            else: line+=" "
-        result.append(lb+line)
-    result.append(" "*10+"+"+"-"*len(closes))
-    last=closes[-1]; chg=((last-closes[0])/closes[0]*100) if closes[0] else 0
-    result.append(f"  {last:,.4f}  {'+'if chg>=0 else ''}{chg:.2f}%")
-    result.append("  # бычья  - медвежья  | тень")
-    return "\n".join(result)
-
 def fear_greed():
     v=random.randint(18,88)
     i=0 if v<25 else 1 if v<45 else 2 if v<55 else 3 if v<75 else 4
-    lb=("Крайний страх","Страх","Нейтрально","Жадность","Крайняя жадность")[i]
-    em=("😱","😨","😐","😏","🤑")[i]
-    return {"value":v,"label":lb,"emoji":em}
+    return {"value":v,
+            "label":("Крайний страх","Страх","Нейтрально","Жадность","Крайняя жадность")[i],
+            "emoji":("😱","😨","😐","😏","🤑")[i]}
 
 # ── PORTFOLIO TEXT ────────────────────────────────────────────────
 def portfolio_text(uid):
     lines=["💼 *ПОРТФЕЛЬ*\n"]; ti=tc=0.0
     bals=get_real_balance()
     err=bals.pop("_error",None); is_mock=bals.pop("_mock",False)
-
-    if err:
-        return f"💼 *ПОРТФЕЛЬ*\n\n❌ Ошибка Binance:\n`{err}`"
-    if is_mock:
-        lines.append("_⚠️ Демо-данные_\n")
-
+    if err: return f"💼 *ПОРТФЕЛЬ*\n\n❌ Ошибка: `{err}`"
+    if is_mock: lines.append("_⚠️ Демо-данные_\n")
     usdt=bals.pop("USDT",0); has=False
     for asset,qty in sorted(bals.items(),key=lambda x:-x[1]):
         if qty<0.000001: continue
@@ -330,7 +487,7 @@ def portfolio_text(uid):
     if usdt>0:
         lines.append(f"💵 *USDT*: `${usdt:.4f}`"); tc+=usdt
     if not has and usdt==0:
-        return "📂 *Портфель пуст*\n\nПополните счёт для начала торговли."
+        return "📂 *Портфель пуст*\n\nПополните счёт для торговли."
     lines.append("─────────────────")
     lines.append(f"💎 *Итого:* `${tc:.2f} USDT`")
     if ti>0:
@@ -345,8 +502,7 @@ def update_portfolio(uid,order):
         if s in port:
             oq=port[s]["qty"]; oa=port[s]["avg_price"]; nq=oq+qty
             port[s]={"qty":nq,"avg_price":round((oq*oa+qty*p)/nq,6)}
-        else:
-            port[s]={"qty":qty,"avg_price":p}
+        else: port[s]={"qty":qty,"avg_price":p}
     else:
         if s in port:
             nq=port[s]["qty"]-qty
@@ -412,8 +568,7 @@ def chart_iv_kb(coin):
 def auto_kb(uid):
     on=USER_DATA[uid]["auto_enabled"]
     tt=TRADE_TYPES.get(USER_DATA[uid]["auto_type"],"")
-    sz=USER_DATA[uid]["auto_size"]
-    nc=len(USER_DATA[uid]["auto_coins"])
+    sz=USER_DATA[uid]["auto_size"]; nc=len(USER_DATA[uid]["auto_coins"])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"Авто: {'🟢 ВКЛ' if on else '🔴 ВЫКЛ'}",callback_data="noop")],
         [InlineKeyboardButton("▶️ Включить" if not on else "⏹ Выключить",callback_data="auto_toggle")],
@@ -512,8 +667,7 @@ async def do_trade(source, ctx, coin, side, amount,
     if not order["ok"]:
         await ctx.bot.send_message(chat_id,
             f"❌ *Ошибка сделки:*\n`{order['error']}`",
-            parse_mode=ParseMode.MARKDOWN)
-        return
+            parse_mode=ParseMode.MARKDOWN); return
     update_portfolio(uid,order); record_order(uid,order,note)
     mt=" _(Демо)_" if order.get("mock") else (" _(Testnet)_" if USE_TESTNET else "")
     se="🛒 КУПЛЕНО" if side=="BUY" else "💰 ПРОДАНО"
@@ -547,7 +701,7 @@ async def do_auto_trade(uid,chat_id,coin,ctx):
     USER_DATA[uid]["chat_id"]=chat_id
     ta=compute_ta(coin); t=get_price(coin); p=t.get("price",0)
     ttype=USER_DATA[uid]["auto_type"]; amount=USER_DATA[uid]["auto_size"]
-    if ta["score"]>=2:    side="BUY"
+    if ta["score"]>=2: side="BUY"
     elif ta["score"]<=-2: side="SELL"
     else: return
     se="🛒" if side=="BUY" else "💰"
@@ -586,15 +740,13 @@ async def cmd_start(u,c):
     st="🟢 ВКЛ" if USER_DATA[uid]["auto_enabled"] else "🔴 ВЫКЛ"
     await u.message.reply_text(
         f"👋 *Добро пожаловать, {name}!*\n\n"
-        f"🤖 *Binance Pro Trading Bot v5.0*\n"
+        f"🤖 *Binance Pro Bot v6.0*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🛒 Покупка / 💰 Продажа вручную\n"
+        f"🛒 Покупка / 💰 Продажа\n"
         f"📈 Спот | 🔮 Фьючерсы | 💳 Маржа\n"
         f"🤖 Авто-трейд: {st}\n"
-        f"⏳ Таймаут: {AUTO_CONFIRM_TIMEOUT}с → авто\n"
-        f"💵 Суммы $5-$50 + своя сумма\n"
-        f"🔔 Алерты по всем 15 монетам\n"
-        f"📉 Графики: 15m/1h/4h/1d/1w\n"
+        f"📉 Графики с индикаторами\n"
+        f"🔔 Алерты по всем монетам\n"
         f"{live}\n\n"
         f"👇 *Выберите действие:*",
         parse_mode=ParseMode.MARKDOWN,reply_markup=main_kb())
@@ -677,13 +829,21 @@ async def cmd_price(u,c):
     await u.message.reply_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN)
 
 async def cmd_chart(u,c):
-    args=c.args; coin=(args[0] if args else "BTC").upper(); iv=args[1] if len(args)>1 else "1h"
-    msg=await u.message.reply_text(f"⏳ График {coin} [{iv}]...")
-    chart=ascii_chart(coin,iv)
-    await c.bot.edit_message_text(
-        chat_id=u.effective_chat.id,message_id=msg.message_id,
-        text=f"📉 *{coin}USDT* [{iv}]\n```\n{chart}\n```",
-        parse_mode=ParseMode.MARKDOWN,reply_markup=chart_iv_kb(coin))
+    args=c.args; coin=(args[0] if args else "BTC").upper()
+    iv=args[1] if len(args)>1 else "1h"
+    msg=await u.message.reply_text(f"⏳ Генерация графика {coin} [{iv}]...")
+    img=generate_chart(coin,iv,60)
+    await msg.delete()
+    if img:
+        await u.message.reply_photo(
+            photo=img,
+            caption=f"📉 *{coin}USDT* [{iv}]",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=chart_iv_kb(coin))
+    else:
+        await u.message.reply_text(
+            f"❌ Не удалось создать график.\nПроверьте что matplotlib установлен.",
+            reply_markup=chart_iv_kb(coin))
 
 async def cmd_portfolio(u,c):
     uid=u.effective_user.id
@@ -701,21 +861,15 @@ async def cmd_orders(u,c):
                          f"   {o['side']} `{o['qty']:.6f}` @ `${o['price']:.4f}` = `${o['total']:.2f}`\n")
         await c.bot.edit_message_text(
             chat_id=u.effective_chat.id,message_id=msg.message_id,
-            text="\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
-        return
+            text="\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back()); return
     local=USER_DATA[uid]["orders"]
     if not local:
         await c.bot.edit_message_text(
             chat_id=u.effective_chat.id,message_id=msg.message_id,
             text=("📭 *Нет истории сделок*\n\n"
-                  "На Binance нет сделок по этим монетам.\n\n"
-                  "Возможные причины:\n"
-                  "• Ещё не торговали этими монетами\n"
-                  "• API не имеет разрешения Read\n"
-                  "• Сделкам более 3 месяцев\n\n"
-                  "Совершите первую сделку через бота!"),
-            parse_mode=ParseMode.MARKDOWN,reply_markup=back())
-        return
+                  "На Binance нет сделок по этим монетам.\n"
+                  "Совершите первую сделку!"),
+            parse_mode=ParseMode.MARKDOWN,reply_markup=back()); return
     lines=["📖 *История сделок (бот)*\n"]
     for o in local[:10]:
         e="🟢" if o["side"]=="BUY" else "🔴"
@@ -729,18 +883,14 @@ async def cmd_balance(u,c):
     bals=get_real_balance()
     err=bals.pop("_error",None); is_mock=bals.pop("_mock",False)
     if err:
-        await u.message.reply_text(f"❌ Ошибка: `{err}`",parse_mode=ParseMode.MARKDOWN); return
+        await u.message.reply_text(f"❌ `{err}`",parse_mode=ParseMode.MARKDOWN); return
     mt=" _(Демо)_" if is_mock else (" _(Testnet)_" if USE_TESTNET else "")
-    lines=[f"💳 *Баланс Binance*{mt}\n"]
-    total=0.0; usdt=bals.pop("USDT",0)
+    lines=[f"💳 *Баланс Binance*{mt}\n"]; total=0.0; usdt=bals.pop("USDT",0)
     if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); total+=usdt
     for asset,qty in sorted(bals.items(),key=lambda x:-x[1]):
         t=get_price(asset)
-        if "error" not in t:
-            v=qty*t["price"]; total+=v
-            lines.append(f"  • *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
-        else:
-            lines.append(f"  • *{asset}*: `{qty:.6f}`")
+        if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"  • *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
+        else: lines.append(f"  • *{asset}*: `{qty:.6f}`")
     lines.append(f"\n💎 *Итого ≈* `${total:.2f} USDT`")
     lines.append(f"\n{'✅ Можно торговать' if usdt>=5 else '⚠️ Пополните USDT (минимум $5)'}")
     await u.message.reply_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
@@ -773,7 +923,6 @@ async def text_handler(u,c):
     uid=u.effective_user.id; text=u.message.text.strip()
     w=USER_DATA[uid].get("waiting_input")
     if not w: return
-
     if w.get("type")=="alert_price":
         try:
             price=float(text.replace("$","").replace(",","."))
@@ -788,7 +937,6 @@ async def text_handler(u,c):
         except:
             await u.message.reply_text("❌ Введите только число: `70000`",parse_mode=ParseMode.MARKDOWN)
         return
-
     if w.get("type") in ("buy_amount","sell_amount","auto_size"):
         try:
             amount=float(text.replace("$","").replace(",","."))
@@ -846,8 +994,7 @@ async def cb(u,c):
             local=USER_DATA[uid]["orders"]
             txt=("📖 *Сделки (бот)*\n\n"+"\n".join(
                 f"{'🟢' if o['side']=='BUY' else '🔴'} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_"
-                for o in local[:8])) if local else \
-                "📭 *Нет сделок*\n\nСовершите первую сделку через бота!"
+                for o in local[:8])) if local else "📭 *Нет сделок*\n\nСовершите первую сделку!"
             await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_prices":
         lines=["💹 *ТОП 15 ЦЕН*\n"]
@@ -884,19 +1031,28 @@ async def cb(u,c):
     elif d=="m_help":
         await q.edit_message_text("📌 Используйте `/help`",parse_mode=ParseMode.MARKDOWN,reply_markup=back())
 
-    # CHART — using __ separator to avoid conflicts
+    # CHART — send real image
     elif d=="m_chart_menu":
         await q.edit_message_text("📉 *График — Выберите монету:*",
                                    parse_mode=ParseMode.MARKDOWN,reply_markup=coins_kb("chrtc","m_main"))
     elif d.startswith("chrtc__"):
         coin=d.split("__")[1]
-        await q.edit_message_text(f"📉 *{coin}USDT* — интервал:",
+        await q.edit_message_text(f"📉 *{coin}USDT* — Выберите интервал:",
                                    parse_mode=ParseMode.MARKDOWN,reply_markup=chart_iv_kb(coin))
     elif d.startswith("chrt__"):
         parts=d.split("__"); coin=parts[1]; iv=parts[2]
-        chart=ascii_chart(coin,iv)
-        await q.edit_message_text(f"📉 *{coin}USDT* [{iv}]\n```\n{chart}\n```",
-                                   parse_mode=ParseMode.MARKDOWN,reply_markup=chart_iv_kb(coin))
+        await q.edit_message_text(f"⏳ Генерация графика {coin} [{iv}]...")
+        img=generate_chart(coin,iv,60)
+        chat_id=u.effective_chat.id
+        if img:
+            await q.delete_message()
+            await c.bot.send_photo(
+                chat_id=chat_id,photo=img,
+                caption=f"📉 *{coin}USDT* [{iv}]  |  EMA20/50 + BB + MACD + RSI",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=chart_iv_kb(coin))
+        else:
+            await q.edit_message_text("❌ Ошибка генерации графика.",reply_markup=chart_iv_kb(coin))
 
     # ANALYSIS
     elif d=="m_analysis":
@@ -1131,7 +1287,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
     app.job_queue.run_repeating(alerts_job,interval=60,first=15)
     app.job_queue.run_repeating(auto_job,interval=300,first=60)
-    log.info("🚀 Bot v5.0 started!")
+    log.info("🚀 Bot v6.0 started!")
     async with app:
         await app.initialize(); await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
