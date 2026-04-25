@@ -222,6 +222,9 @@ def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
     """Generate a beautiful candlestick chart and return as PNG bytes."""
     if not MPL_OK:
         return None
+    import sys
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(5000)
     try:
         klines = get_klines(coin, interval, limit)
         dates  = [datetime.fromtimestamp(k[0]/1000) for k in klines]
@@ -242,14 +245,11 @@ def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
         LINE_C   = "#f0b90b"   # EMA line (yellow)
         BB_C     = "#58a6ff"   # Bollinger
 
-        fig = plt.figure(figsize=(12, 7), facecolor=BG)
-        gs  = GridSpec(4, 1, figure=fig, hspace=0.05,
-                       height_ratios=[3, 1, 0.8, 0.8])
-
-        ax1 = fig.add_subplot(gs[0])  # Price + candles
-        ax2 = fig.add_subplot(gs[1], sharex=ax1)  # Volume
-        ax3 = fig.add_subplot(gs[2], sharex=ax1)  # MACD
-        ax4 = fig.add_subplot(gs[3], sharex=ax1)  # RSI
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(
+            4, 1, figsize=(12, 8),
+            gridspec_kw={"height_ratios":[3,1,0.8,0.8],"hspace":0.05},
+            facecolor=BG)
+        fig.patch.set_facecolor(BG)
 
         for ax in [ax1,ax2,ax3,ax4]:
             ax.set_facecolor(BG)
@@ -276,13 +276,15 @@ def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
                      color=color, linewidth=0.8)
 
         # ── EMA 20 ────────────────────────────────────────────────
-        def ema(prices, n):
+        def chart_ema(prices, n):
+            if len(prices) < n:
+                return [None]*len(prices)
             k=2/(n+1); r=[sum(prices[:n])/n]
             for p in prices[n:]: r.append(p*k+r[-1]*(1-k))
             return [None]*(n-1)+r
 
-        ema20 = ema(closes, 20)
-        ema50 = ema(closes, 50)
+        ema20 = chart_ema(closes, 20)
+        ema50 = chart_ema(closes, 50)
         e20_x = [x[i] for i in range(len(x)) if ema20[i] is not None]
         e20_y = [v for v in ema20 if v is not None]
         e50_x = [x[i] for i in range(len(x)) if ema50[i] is not None]
@@ -328,14 +330,14 @@ def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
 
         # ── MACD ──────────────────────────────────────────────────
         def calc_macd(p):
-            e12=ema(p,12); e26=ema(p,26)
-            ml=[]; sl=[]
+            e12=chart_ema(p,12); e26=chart_ema(p,26)
+            ml=[]
             for i in range(len(p)):
                 if e12[i] and e26[i]: ml.append(e12[i]-e26[i])
                 else: ml.append(None)
             valid=[v for v in ml if v is not None]
             if len(valid)>=9:
-                se=ema(valid,9)
+                se=chart_ema(valid,9)
                 pad=[None]*(len(ml)-len(se))
                 se=pad+se
             else:
@@ -403,11 +405,19 @@ def generate_chart(coin, interval="1h", limit=60) -> Optional[bytes]:
                     facecolor=BG)
         plt.close(fig)
         buf.seek(0)
-        return buf.read()
+        data = buf.read()
+        sys.setrecursionlimit(old_limit)
+        return data
 
     except Exception as e:
+        import traceback, sys
         log.error(f"Chart error: {e}")
-        plt.close("all")
+        log.error(traceback.format_exc())
+        try:
+            plt.close("all")
+            sys.setrecursionlimit(old_limit)
+        except:
+            pass
         return None
 
 # ── TECHNICAL ANALYSIS ────────────────────────────────────────────
@@ -841,8 +851,12 @@ async def cmd_chart(u,c):
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=chart_iv_kb(coin))
     else:
+        ta = compute_ta(coin)
+        t  = get_price(coin)
         await u.message.reply_text(
-            f"❌ Не удалось создать график.\nПроверьте что matplotlib установлен.",
+            ta_text(coin, t.get("price",0), ta, iv) +
+            "\n\n_⚠️ График временно недоступен_",
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=chart_iv_kb(coin))
 
 async def cmd_portfolio(u,c):
@@ -1052,7 +1066,13 @@ async def cb(u,c):
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=chart_iv_kb(coin))
         else:
-            await q.edit_message_text("❌ Ошибка генерации графика.",reply_markup=chart_iv_kb(coin))
+            ta = compute_ta(coin)
+            t  = get_price(coin)
+            await q.edit_message_text(
+                ta_text(coin, t.get("price",0), ta, iv) +
+                "\n\n_⚠️ График временно недоступен_",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=chart_iv_kb(coin))
 
     # ANALYSIS
     elif d=="m_analysis":
