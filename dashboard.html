@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Binance Pro Bot — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Unbounded:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg0:    #060a0f;
+  --bg1:    #0c1219;
+  --bg2:    #111c27;
+  --bg3:    #172233;
+  --border: #1e3045;
+  --gold:   #f0b90b;
+  --gold2:  #ffd84d;
+  --green:  #00d395;
+  --red:    #ff4f6d;
+  --blue:   #2196f3;
+  --purple: #a78bfa;
+  --text:   #e2eaf5;
+  --muted:  #4a6480;
+  --glow-g: 0 0 24px rgba(0,211,149,0.18);
+  --glow-r: 0 0 24px rgba(255,79,109,0.18);
+  --glow-y: 0 0 32px rgba(240,185,11,0.22);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg0);
+  color:var(--text);
+  font-family:'JetBrains Mono',monospace;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* ── GRID BG ── */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:
+    linear-gradient(rgba(240,185,11,.025) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(240,185,11,.025) 1px,transparent 1px);
+  background-size:48px 48px;
+  pointer-events:none;z-index:0;
+}
+body::after{
+  content:'';position:fixed;inset:0;
+  background:radial-gradient(ellipse 80% 50% at 50% -20%,rgba(240,185,11,.07),transparent);
+  pointer-events:none;z-index:0;
+}
+
+.wrap{position:relative;z-index:1;max-width:1280px;margin:0 auto;padding:20px 16px 40px}
+
+/* ── HEADER ── */
+header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 0 20px;border-bottom:1px solid var(--border);
+  margin-bottom:24px;
+}
+.brand{display:flex;align-items:center;gap:14px}
+.brand-logo{
+  width:46px;height:46px;border-radius:14px;
+  background:linear-gradient(135deg,#f0b90b,#ffd84d);
+  display:grid;place-items:center;font-size:22px;
+  box-shadow:var(--glow-y);flex-shrink:0;
+}
+.brand-name{font-family:'Unbounded',sans-serif;font-weight:900;font-size:18px;
+  background:linear-gradient(90deg,var(--gold),var(--gold2));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.5px}
+.brand-sub{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:2px}
+.header-right{display:flex;align-items:center;gap:14px}
+.live-badge{
+  display:flex;align-items:center;gap:6px;
+  font-size:11px;color:var(--green);
+  background:rgba(0,211,149,.08);border:1px solid rgba(0,211,149,.2);
+  padding:5px 12px;border-radius:20px;
+}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green);animation:pulse 1.8s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.btn{
+  font-family:'JetBrains Mono',monospace;font-size:11px;
+  padding:7px 18px;border-radius:8px;cursor:pointer;
+  background:rgba(240,185,11,.1);border:1px solid rgba(240,185,11,.3);
+  color:var(--gold);transition:all .2s;
+}
+.btn:hover{background:rgba(240,185,11,.2);box-shadow:var(--glow-y)}
+
+/* ── TICKER TAPE ── */
+.tape-wrap{
+  overflow:hidden;border-radius:10px;
+  background:var(--bg1);border:1px solid var(--border);
+  padding:8px 0;margin-bottom:24px;
+}
+.tape{display:flex;gap:36px;animation:scroll 28s linear infinite;white-space:nowrap;padding:0 20px}
+.tape-item{font-size:12px;display:flex;align-items:center;gap:6px}
+.tape-sym{color:var(--muted);font-weight:500}
+.tape-price{font-weight:700}
+.tape-chg{font-size:10px;padding:2px 7px;border-radius:5px}
+.up{color:var(--green)}.down{color:var(--red)}
+.up-bg{background:rgba(0,211,149,.1);color:var(--green)}
+.down-bg{background:rgba(255,79,109,.1);color:var(--red)}
+@keyframes scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
+
+/* ── SECTION LABEL ── */
+.sec{
+  font-family:'Unbounded',sans-serif;font-size:10px;font-weight:700;
+  letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:14px;
+  display:flex;align-items:center;gap:10px;
+}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* ── METRIC CARDS ── */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.mcard{
+  background:var(--bg1);border:1px solid var(--border);
+  border-radius:14px;padding:18px;
+  position:relative;overflow:hidden;transition:border-color .2s,box-shadow .2s;
+}
+.mcard:hover{border-color:rgba(240,185,11,.4);box-shadow:var(--glow-y)}
+.mcard::before{
+  content:'';position:absolute;top:0;right:0;
+  width:60px;height:60px;border-radius:0 14px 0 60px;
+  background:linear-gradient(135deg,rgba(240,185,11,.06),transparent);
+}
+.mcard-label{font-size:10px;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.mcard-price{font-family:'Unbounded',sans-serif;font-size:22px;font-weight:700;color:var(--text);line-height:1}
+.mcard-chg{font-size:12px;margin-top:6px;font-weight:500}
+.mcard-spark{margin-top:10px}
+
+/* ── TWO COL ── */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px}
+
+/* ── CARD ── */
+.card{
+  background:var(--bg1);border:1px solid var(--border);
+  border-radius:14px;padding:20px;
+}
+.card-title{
+  font-family:'Unbounded',sans-serif;font-size:11px;font-weight:700;
+  color:var(--gold);letter-spacing:1px;text-transform:uppercase;margin-bottom:14px;
+}
+
+/* ── CHART AREA ── */
+.chart-wrap{position:relative;height:240px;margin-bottom:6px}
+canvas#priceChart{width:100%!important;height:100%!important}
+
+/* ── COIN ROWS ── */
+.coin-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;
+}
+.coin-row:last-child{border-bottom:none}
+.coin-sym{font-weight:700;color:var(--text)}
+.coin-price{color:var(--muted)}
+.badge{font-size:10px;font-weight:700;padding:3px 9px;border-radius:6px}
+
+/* ── RSI GAUGE ── */
+.rsi-wrap{display:flex;align-items:center;gap:18px;margin-bottom:14px}
+.rsi-gauge{flex-shrink:0}
+.rsi-info{}
+.rsi-num{font-family:'Unbounded',sans-serif;font-size:30px;font-weight:900;color:var(--text);line-height:1}
+.rsi-label{font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:1px}
+.ind-row{display:flex;justify-content:space-between;align-items:center;
+  padding:6px 0;border-bottom:1px solid var(--border);font-size:11px}
+.ind-row:last-child{border-bottom:none}
+.ind-name{color:var(--muted)}
+.ind-val{font-weight:700}
+.signal-box{
+  border-radius:10px;padding:10px 16px;text-align:center;
+  font-family:'Unbounded',sans-serif;font-size:12px;font-weight:700;
+  margin-top:12px;letter-spacing:.5px;
+}
+.sig-buy{background:rgba(0,211,149,.12);color:var(--green);border:1px solid rgba(0,211,149,.25)}
+.sig-sell{background:rgba(255,79,109,.12);color:var(--red);border:1px solid rgba(255,79,109,.25)}
+.sig-neutral{background:rgba(240,185,11,.08);color:var(--gold);border:1px solid rgba(240,185,11,.2)}
+
+/* ── ORDER BOOK ── */
+.ob-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11px}
+.ob-bar-wrap{flex:1;height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.ob-bar{height:100%;border-radius:2px;transition:width .4s}
+.ob-price{min-width:80px;font-weight:600}
+.ob-qty{min-width:50px;text-align:right;color:var(--muted)}
+.ob-divider{text-align:center;font-size:10px;color:var(--muted);
+  padding:5px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin:4px 0}
+
+/* ── FEAR GREED ── */
+.fg-big{font-family:'Unbounded',sans-serif;font-size:48px;font-weight:900;
+  text-align:center;line-height:1;color:var(--gold)}
+.fg-label{text-align:center;font-size:13px;color:var(--muted);margin:6px 0 14px}
+.fg-track{height:12px;border-radius:6px;
+  background:linear-gradient(90deg,#ff4f6d,#ff9a3c,#f0b90b,#00d395,#2196f3);
+  position:relative;margin-bottom:8px}
+.fg-needle{
+  position:absolute;top:-5px;width:5px;height:22px;
+  background:white;border-radius:3px;transform:translateX(-50%);
+  box-shadow:0 0 10px rgba(255,255,255,.6);
+  transition:left 1.5s cubic-bezier(.34,1.56,.64,1);
+}
+.fg-scale{display:flex;justify-content:space-between;font-size:9px;color:var(--muted)}
+
+/* ── PORTFOLIO ── */
+.port-row{
+  display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;
+  gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:11px;
+  align-items:center;
+}
+.port-row:last-child{border-bottom:none}
+.port-sym{font-weight:700;color:var(--text)}
+.port-entry{color:var(--muted)}
+.port-val{font-weight:600}
+.port-pnl{font-weight:700;text-align:right}
+.port-total{
+  display:flex;justify-content:space-between;
+  margin-top:12px;padding-top:12px;
+  border-top:1px solid var(--border);font-size:12px;
+}
+
+/* ── AUTO TRADE PANEL ── */
+.auto-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;
+}
+.auto-row:last-child{border-bottom:none}
+.auto-key{color:var(--muted)}
+.auto-val{font-weight:600}
+.toggle{
+  width:40px;height:22px;border-radius:11px;
+  cursor:pointer;position:relative;transition:background .25s;
+}
+.toggle.on{background:var(--green);box-shadow:var(--glow-g)}
+.toggle.off{background:var(--bg3);border:1px solid var(--border)}
+.knob{
+  width:16px;height:16px;border-radius:50%;background:white;
+  position:absolute;top:3px;transition:left .25s;
+}
+.toggle.on .knob{left:21px}
+.toggle.off .knob{left:3px}
+.signal-chip{
+  font-size:10px;font-weight:700;padding:3px 10px;
+  border-radius:6px;font-family:'JetBrains Mono',monospace;
+}
+
+/* ── WHALE ── */
+.whale-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:7px 0;border-bottom:1px solid var(--border);font-size:11px;
+}
+.whale-row:last-child{border-bottom:none}
+.whale-side{font-weight:700;min-width:90px}
+.whale-amt{color:var(--muted)}
+
+/* ── COMMANDS ── */
+.cmd-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cmd-item{
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;transition:border-color .2s;
+}
+.cmd-item:hover{border-color:rgba(240,185,11,.3)}
+.cmd-name{font-size:11px;color:var(--gold);margin-bottom:3px;font-weight:700}
+.cmd-desc{font-size:10px;color:var(--muted)}
+
+/* ── MACD BARS ── */
+.macd-bars{display:flex;align-items:flex-end;gap:2px;height:60px}
+.macd-bar{flex:1;border-radius:1px 1px 0 0;min-height:2px;transition:height .3s}
+
+/* ── FOOTER ── */
+footer{
+  margin-top:32px;padding-top:20px;border-top:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:10px;color:var(--muted);
+}
+
+@media(max-width:900px){
+  .metrics{grid-template-columns:1fr 1fr}
+  .grid-2,.grid-3{grid-template-columns:1fr}
+  .cmd-grid{grid-template-columns:1fr}
+}
+@media(max-width:500px){
+  .metrics{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- HEADER -->
+<header>
+  <div class="brand">
+    <div class="brand-logo">₿</div>
+    <div>
+      <div class="brand-name">BINANCE PRO BOT</div>
+      <div class="brand-sub">Trading Dashboard v6.0</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="live-badge"><span class="live-dot"></span>Live</div>
+    <button class="btn" onclick="refreshAll()">↻ Обновить</button>
+  </div>
+</header>
+
+<!-- TICKER TAPE -->
+<div class="tape-wrap">
+  <div class="tape" id="tape">
+    <span class="tape-item"><span class="tape-sym">BTC</span><span class="tape-price up" id="tp-btc">$77,530</span><span class="tape-chg up-bg" id="tc-btc">+2.14%</span></span>
+    <span class="tape-item"><span class="tape-sym">ETH</span><span class="tape-price up" id="tp-eth">$3,452</span><span class="tape-chg up-bg">+1.82%</span></span>
+    <span class="tape-item"><span class="tape-sym">BNB</span><span class="tape-price up">$582</span><span class="tape-chg up-bg">+0.9%</span></span>
+    <span class="tape-item"><span class="tape-sym">SOL</span><span class="tape-price down">$176</span><span class="tape-chg down-bg">-0.6%</span></span>
+    <span class="tape-item"><span class="tape-sym">XRP</span><span class="tape-price up">$0.582</span><span class="tape-chg up-bg">+3.1%</span></span>
+    <span class="tape-item"><span class="tape-sym">DOGE</span><span class="tape-price up">$0.161</span><span class="tape-chg up-bg">+5.4%</span></span>
+    <span class="tape-item"><span class="tape-sym">ADA</span><span class="tape-price down">$0.481</span><span class="tape-chg down-bg">-1.2%</span></span>
+    <span class="tape-item"><span class="tape-sym">AVAX</span><span class="tape-price up">$38.7</span><span class="tape-chg up-bg">+2.8%</span></span>
+    <span class="tape-item"><span class="tape-sym">LINK</span><span class="tape-price up">$18.4</span><span class="tape-chg up-bg">+1.1%</span></span>
+    <span class="tape-item"><span class="tape-sym">NEAR</span><span class="tape-price up">$7.1</span><span class="tape-chg up-bg">+4.2%</span></span>
+    <!-- duplicate for loop -->
+    <span class="tape-item"><span class="tape-sym">BTC</span><span class="tape-price up">$77,530</span><span class="tape-chg up-bg">+2.14%</span></span>
+    <span class="tape-item"><span class="tape-sym">ETH</span><span class="tape-price up">$3,452</span><span class="tape-chg up-bg">+1.82%</span></span>
+    <span class="tape-item"><span class="tape-sym">BNB</span><span class="tape-price up">$582</span><span class="tape-chg up-bg">+0.9%</span></span>
+    <span class="tape-item"><span class="tape-sym">SOL</span><span class="tape-price down">$176</span><span class="tape-chg down-bg">-0.6%</span></span>
+    <span class="tape-item"><span class="tape-sym">XRP</span><span class="tape-price up">$0.582</span><span class="tape-chg up-bg">+3.1%</span></span>
+  </div>
+</div>
+
+<!-- METRICS -->
+<div class="sec">Рынок сейчас</div>
+<div class="metrics">
+  <div class="mcard">
+    <div class="mcard-label">BTC / USDT</div>
+    <div class="mcard-price" id="m-btc">$77,530</div>
+    <div class="mcard-chg up" id="mc-btc">▲ +2.14%</div>
+    <svg class="mcard-spark" id="sp-btc" width="100%" height="36"></svg>
+  </div>
+  <div class="mcard">
+    <div class="mcard-label">ETH / USDT</div>
+    <div class="mcard-price" id="m-eth" style="color:#7eb3ff">$3,452</div>
+    <div class="mcard-chg up" id="mc-eth">▲ +1.82%</div>
+    <svg class="mcard-spark" id="sp-eth" width="100%" height="36"></svg>
+  </div>
+  <div class="mcard">
+    <div class="mcard-label">SOL / USDT</div>
+    <div class="mcard-price" id="m-sol" style="color:#a78bfa">$176.4</div>
+    <div class="mcard-chg down" id="mc-sol">▼ -0.61%</div>
+    <svg class="mcard-spark" id="sp-sol" width="100%" height="36"></svg>
+  </div>
+  <div class="mcard">
+    <div class="mcard-label">DOGE / USDT</div>
+    <div class="mcard-price" id="m-doge" style="color:#fbbf24">$0.1614</div>
+    <div class="mcard-chg up" id="mc-doge">▲ +5.4%</div>
+    <svg class="mcard-spark" id="sp-doge" width="100%" height="36"></svg>
+  </div>
+</div>
+
+<!-- CHART + TA -->
+<div class="grid-2" style="margin-bottom:16px">
+  <div>
+    <div class="sec">График BTC/USDT</div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div class="card-title" style="margin:0">BTC/USDT</div>
+        <div style="display:flex;gap:6px" id="ivbtns">
+          <button class="btn" onclick="setIv('15m')" id="iv15m" style="padding:4px 10px;font-size:10px">15m</button>
+          <button class="btn" onclick="setIv('1h')"  id="iv1h"  style="padding:4px 10px;font-size:10px;background:rgba(240,185,11,.25)">1h</button>
+          <button class="btn" onclick="setIv('4h')"  id="iv4h"  style="padding:4px 10px;font-size:10px">4h</button>
+          <button class="btn" onclick="setIv('1d')"  id="iv1d"  style="padding:4px 10px;font-size:10px">1d</button>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="sec">Технический анализ</div>
+    <div class="card">
+      <div class="card-title">BTC/USDT — Индикаторы</div>
+      <div class="rsi-wrap">
+        <div class="rsi-gauge">
+          <svg viewBox="0 0 120 64" width="120" height="64">
+            <path d="M10 60 A50 50 0 0 1 110 60" fill="none" stroke="#172233" stroke-width="10"/>
+            <path id="rsiArc" d="M10 60 A50 50 0 0 1 110 60" fill="none"
+              stroke="#f0b90b" stroke-width="10" stroke-linecap="round"
+              stroke-dasharray="157" stroke-dashoffset="78"/>
+            <text x="60" y="56" text-anchor="middle" font-size="20" font-weight="700"
+              fill="#e2eaf5" font-family="JetBrains Mono,monospace" id="rsiTxt">52</text>
+          </svg>
+        </div>
+        <div class="rsi-info">
+          <div class="rsi-num" id="rsiNum">52</div>
+          <div class="rsi-label">RSI (14)</div>
+          <div style="margin-top:8px" id="rsiStatus"><span class="badge sig-neutral">Норма</span></div>
+        </div>
+      </div>
+      <div class="ind-row"><span class="ind-name">MACD Histogram</span><span class="ind-val up" id="indMacd">+45.2</span></div>
+      <div class="ind-row"><span class="ind-name">EMA 12 / 26</span><span class="ind-val" id="indEma">77,100 / 76,800</span></div>
+      <div class="ind-row"><span class="ind-name">BB Верх</span><span class="ind-val" id="indBbu">$78,420</span></div>
+      <div class="ind-row"><span class="ind-name">BB Низ</span><span class="ind-val" id="indBbl">$76,180</span></div>
+      <div class="ind-row"><span class="ind-name">MACD</span>
+        <div class="macd-bars" id="macdBars" style="height:30px;gap:1px;flex:1;margin-left:12px"></div>
+      </div>
+      <div class="signal-box sig-buy" id="sigBox">🟢 СИЛЬНАЯ ПОКУПКА</div>
+    </div>
+  </div>
+</div>
+
+<!-- ORDER BOOK + FEAR GREED -->
+<div class="grid-2" style="margin-bottom:16px">
+  <div>
+    <div class="sec">Стакан заявок</div>
+    <div class="card">
+      <div class="card-title">BTC/USDT — Order Book</div>
+      <div id="asksList"></div>
+      <div class="ob-divider" id="spreadRow">Спред: $12.40</div>
+      <div id="bidsList"></div>
+    </div>
+  </div>
+  <div>
+    <div class="sec">Страх и жадность</div>
+    <div class="card">
+      <div class="card-title">Fear & Greed Index</div>
+      <div class="fg-big" id="fgVal">62</div>
+      <div class="fg-label" id="fgLabel">😏 Жадность</div>
+      <div class="fg-track"><div class="fg-needle" id="fgNeedle" style="left:62%"></div></div>
+      <div class="fg-scale">
+        <span>Паника</span><span>Страх</span><span>Нейтр.</span><span>Жадн.</span><span>Мания</span>
+      </div>
+      <div style="margin-top:16px">
+        <div class="sec" style="margin-bottom:10px">Киты (1ч)</div>
+        <div id="whaleList"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SCREENER + PORTFOLIO -->
+<div class="grid-2" style="margin-bottom:16px">
+  <div>
+    <div class="sec">Скринер</div>
+    <div class="card">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div class="card-title">🟢 Рост</div>
+          <div id="gainers"></div>
+        </div>
+        <div>
+          <div class="card-title">🔴 Падение</div>
+          <div id="losers"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="sec">Портфель</div>
+    <div class="card">
+      <div class="card-title">Binance Spot</div>
+      <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:4px;
+        font-size:10px;color:var(--muted);padding-bottom:6px;border-bottom:1px solid var(--border);margin-bottom:4px">
+        <div>Актив</div><div>Кол-во</div><div>Стоим.</div><div style="text-align:right">PnL</div>
+      </div>
+      <div id="portList"></div>
+      <div class="port-total">
+        <span style="color:var(--muted)">Вложено <b style="color:var(--text)" id="portInv">$3,900</b></span>
+        <span id="portPnl" class="up" style="font-weight:700">+$284 (+7.3%)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AUTO TRADE + COMMANDS -->
+<div class="grid-2">
+  <div>
+    <div class="sec">Авто-трейд</div>
+    <div class="card">
+      <div class="card-title">Настройки</div>
+      <div class="auto-row">
+        <span class="auto-key">Статус</span>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="autoStatusTxt" class="up" style="font-weight:700;font-size:11px">ВКЛ</span>
+          <div class="toggle on" id="autoToggle" onclick="toggleAuto()"><div class="knob"></div></div>
+        </div>
+      </div>
+      <div class="auto-row"><span class="auto-key">Тип</span><span class="auto-val" id="autoType">📈 Спот</span></div>
+      <div class="auto-row"><span class="auto-key">Сумма</span><span class="auto-val" id="autoSize">$20</span></div>
+      <div class="auto-row"><span class="auto-key">Монет активно</span><span class="auto-val" id="autoCoins">15/15</span></div>
+      <div class="auto-row" style="border:none">
+        <span class="auto-key">Последний сигнал</span>
+        <span class="signal-chip up-bg" id="lastSig">🟢 BUY XRP</span>
+      </div>
+      <div style="margin-top:14px;padding:12px;background:var(--bg2);border-radius:10px;
+        border:1px solid var(--border);font-size:10px;color:var(--muted);line-height:1.8">
+        Алгоритм: RSI + MACD + Bollinger Bands<br>
+        Таймаут авто-подтверждения: <b style="color:var(--gold)">30с</b><br>
+        Интервал сканирования: <b style="color:var(--gold)">5 мин</b>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div class="sec">Команды бота</div>
+    <div class="card">
+      <div class="card-title">Telegram команды</div>
+      <div class="cmd-grid" id="cmdGrid"></div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span>Binance Pro Bot v6.0 © 2025</span>
+  <span id="lastUpdate">Обновлено: --:--:--</span>
+</footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+// ── DATA ──────────────────────────────────────────────────────
+const COINS=[
+  {s:"BTC",p:77530,c:2.14},{s:"ETH",p:3452,c:1.82},{s:"BNB",p:582,c:0.9},
+  {s:"SOL",p:176,c:-0.61},{s:"XRP",p:0.582,c:3.1},{s:"ADA",p:0.481,c:-1.2},
+  {s:"DOGE",p:0.1614,c:5.4},{s:"AVAX",p:38.7,c:2.8},{s:"DOT",p:7.8,c:-0.9},
+  {s:"MATIC",p:0.91,c:-0.4},{s:"LINK",p:18.4,c:1.1},{s:"LTC",p:82,c:-2.1},
+  {s:"UNI",p:9.3,c:3.5},{s:"ATOM",p:10.5,c:-1.8},{s:"NEAR",p:7.1,c:4.2}
+];
+const CMDS=[
+  {c:"/buy BTC 20",d:"Купить $20 BTC"},{c:"/sell ETH 15",d:"Продать $15 ETH"},
+  {c:"/auto on",d:"Включить авто"},{c:"/auto off",d:"Выключить авто"},
+  {c:"/scan",d:"Сканировать монеты"},{c:"/chart BTC 1h",d:"График BTC"},
+  {c:"/portfolio",d:"Портфель + PnL"},{c:"/orders",d:"История сделок"},
+  {c:"/balance",d:"Баланс Binance"},{c:"/analysis ETH",d:"TA анализ"},
+  {c:"/alert XRP above 0.7",d:"Алерт на цену"},{c:"/fg",d:"Страх & Жадность"},
+];
+const PORT=[
+  {s:"XRP",q:3.39,avg:1.45,cur:1.44},{s:"DOGE",q:19.98,avg:0.097,cur:0.161},
+  {s:"USDT",q:0.47,avg:1,cur:1},
+];
+const SIGS=["🟢 BUY XRP","🟢 BUY DOGE","🔴 SELL BTC","🟢 BUY SOL","🔴 SELL ETH","🟢 BUY NEAR"];
+let autoOn=true;
+let currentIv="1h";
+let chartInst=null;
+let priceData=[];
+
+function rnd(a,b,d=2){return+(Math.random()*(b-a)+a).toFixed(d)}
+function fmt(n,d=2){return n.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d})}
+
+// ── SPARKLINE ──────────────────────────────────────────────────
+function drawSpark(id,pts,color){
+  const svg=document.getElementById(id);
+  if(!svg)return;
+  const W=svg.getBoundingClientRect().width||180,H=36;
+  const mi=Math.min(...pts),ma=Math.max(...pts),span=ma-mi||1;
+  const px=(i)=>(i/(pts.length-1))*W;
+  const py=(v)=>H-((v-mi)/span)*(H-4)-2;
+  const poly=pts.map((v,i)=>`${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  svg.innerHTML=`<polyline points="${poly}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+// ── CHART ──────────────────────────────────────────────────────
+function buildChart(){
+  const ctx=document.getElementById("priceChart").getContext("2d");
+  if(chartInst)chartInst.destroy();
+  const up=priceData[priceData.length-1]>=priceData[0];
+  const color=up?"#00d395":"#ff4f6d";
+  chartInst=new Chart(ctx,{
+    type:"line",
+    data:{labels:priceData.map((_,i)=>i),datasets:[{
+      data:priceData,borderColor:color,borderWidth:1.8,
+      pointRadius:0,tension:0.35,fill:true,
+      backgroundColor:up?"rgba(0,211,149,0.07)":"rgba(255,79,109,0.07)"
+    }]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      animation:{duration:400},
+      plugins:{legend:{display:false},tooltip:{
+        backgroundColor:"#111c27",borderColor:"#1e3045",borderWidth:1,
+        titleColor:"#4a6480",bodyColor:"#e2eaf5",
+        callbacks:{label:c=>"$"+fmt(c.raw)}
+      }},
+      scales:{
+        x:{display:true,grid:{color:"rgba(30,48,69,.6)"},
+          ticks:{color:"#4a6480",font:{size:9},maxTicksLimit:8}},
+        y:{display:true,position:"right",grid:{color:"rgba(30,48,69,.6)"},
+          ticks:{color:"#4a6480",font:{size:9},callback:v=>"$"+Math.round(v/1000)+"k"}}
+      }
+    }
+  });
+}
+
+function setIv(iv){
+  currentIv=iv;
+  document.querySelectorAll("#ivbtns button").forEach(b=>{
+    b.style.background=b.id==="iv"+iv?"rgba(240,185,11,.25)":"rgba(240,185,11,.1)";
+  });
+  const mult=iv==="15m"?.3:iv==="1h"?1:iv==="4h"?4:10;
+  priceData=Array.from({length:60},(_,i)=>
+    +(77000+Math.sin(i/7)*600*mult/3+rnd(-120*mult/3,120*mult/3)).toFixed(2));
+  buildChart();
+}
+
+// ── ORDER BOOK ────────────────────────────────────────────────
+function renderOB(){
+  const base=77530; let aH="",bH="";
+  for(let i=4;i>=0;i--){
+    const p=(base+(i+1)*10+rnd(0,6)).toFixed(2);
+    const q=rnd(.1,2.8,3); const w=Math.round(q/3*100);
+    aH+=`<div class="ob-row">
+      <span class="ob-price red">$${fmt(parseFloat(p))}</span>
+      <div class="ob-bar-wrap"><div class="ob-bar" style="width:${w}%;background:rgba(255,79,109,.35)"></div></div>
+      <span class="ob-qty">${q}</span></div>`;
+  }
+  for(let i=0;i<5;i++){
+    const p=(base-i*10-rnd(0,6)).toFixed(2);
+    const q=rnd(.1,2.8,3); const w=Math.round(q/3*100);
+    bH+=`<div class="ob-row">
+      <span class="ob-price up">$${fmt(parseFloat(p))}</span>
+      <div class="ob-bar-wrap"><div class="ob-bar" style="width:${w}%;background:rgba(0,211,149,.3)"></div></div>
+      <span class="ob-qty">${q}</span></div>`;
+  }
+  document.getElementById("asksList").innerHTML=aH;
+  document.getElementById("bidsList").innerHTML=bH;
+  document.getElementById("spreadRow").textContent="Спред: $"+rnd(8,18,2);
+}
+
+// ── RSI ───────────────────────────────────────────────────────
+function updateRSI(){
+  const v=Math.round(rnd(25,75,0));
+  document.getElementById("rsiTxt").textContent=v;
+  document.getElementById("rsiNum").textContent=v;
+  const arc=document.getElementById("rsiArc");
+  arc.setAttribute("stroke-dashoffset",String(157-(v/100)*157));
+  arc.setAttribute("stroke",v<30?"#00d395":v>70?"#ff4f6d":"#f0b90b");
+  const st=document.getElementById("rsiStatus");
+  if(v<30){st.innerHTML='<span class="badge sig-buy">Перепродан 🔥</span>'}
+  else if(v>70){st.innerHTML='<span class="badge sig-sell">Перекуплен ❄️</span>'}
+  else{st.innerHTML='<span class="badge sig-neutral">Норма</span>'}
+  const h=rnd(-80,80);
+  document.getElementById("indMacd").textContent=(h>=0?"+":"")+h.toFixed(1);
+  document.getElementById("indMacd").className="ind-val "+(h>=0?"up":"down");
+  const score=(v<30?2:v>70?-2:0)+(h>0?1:-1);
+  const sb=document.getElementById("sigBox");
+  if(score>=2){sb.textContent="🟢 СИЛЬНАЯ ПОКУПКА";sb.className="signal-box sig-buy"}
+  else if(score>=1){sb.textContent="🟩 ПОКУПКА";sb.className="signal-box sig-buy"}
+  else if(score<=-2){sb.textContent="🔴 СИЛЬНАЯ ПРОДАЖА";sb.className="signal-box sig-sell"}
+  else if(score<=-1){sb.textContent="🟥 ПРОДАЖА";sb.className="signal-box sig-sell"}
+  else{sb.textContent="🟡 НЕЙТРАЛЬНО";sb.className="signal-box sig-neutral"}
+  // MACD bars
+  const mb=document.getElementById("macdBars");
+  mb.innerHTML=Array.from({length:16},()=>{
+    const v=rnd(-50,50); const h=Math.abs(v)*0.5+3;
+    return`<div class="macd-bar" style="height:${h}px;background:${v>=0?"var(--green)":"var(--red)"};opacity:.8"></div>`;
+  }).join("");
+}
+
+// ── FG ────────────────────────────────────────────────────────
+let fgVals=[42,55,68,74,62,58,71,65,48,52,67,62];
+let fgIdx=0;
+function updateFG(){
+  const v=fgVals[fgIdx%fgVals.length]; fgIdx++;
+  const lbls=["😱 Крайний страх","😨 Страх","😐 Нейтрально","😏 Жадность","🤑 Крайняя жадность"];
+  const li=v<25?0:v<45?1:v<55?2:v<75?3:4;
+  document.getElementById("fgVal").textContent=v;
+  document.getElementById("fgLabel").textContent=lbls[li];
+  document.getElementById("fgNeedle").style.left=v+"%";
+}
+
+// ── SCREENER ─────────────────────────────────────────────────
+function renderScreener(){
+  const sorted=[...COINS].map(c=>({...c,c:c.c+rnd(-.3,.3)})).sort((a,b)=>b.c-a.c);
+  document.getElementById("gainers").innerHTML=sorted.slice(0,5).map(c=>
+    `<div class="coin-row"><span class="coin-sym">${c.s}</span>
+     <span class="badge up-bg">+${c.c.toFixed(2)}%</span></div>`).join("");
+  document.getElementById("losers").innerHTML=sorted.slice(-5).reverse().map(c=>
+    `<div class="coin-row"><span class="coin-sym">${c.s}</span>
+     <span class="badge down-bg">${c.c.toFixed(2)}%</span></div>`).join("");
+}
+
+// ── PORTFOLIO ─────────────────────────────────────────────────
+function renderPort(){
+  let ti=0,tc=0;
+  document.getElementById("portList").innerHTML=PORT.map(p=>{
+    const pn=p.q*p.cur-p.q*p.avg; const pct=pn/(p.q*p.avg)*100;
+    if(p.s!=="USDT"){ti+=p.q*p.avg;tc+=p.q*p.cur;}else tc+=p.q;
+    const e=pn>=0?"up":"down";
+    return`<div class="port-row">
+      <span class="port-sym">${p.s}</span>
+      <span class="port-entry">${p.q.toFixed(3)}</span>
+      <span class="port-val">$${(p.q*p.cur).toFixed(2)}</span>
+      <span class="port-pnl ${e}">${pn>=0?"+":""}${pct.toFixed(1)}%</span></div>`;
+  }).join("");
+  const tp=tc-ti,tpct=tp/ti*100;
+  document.getElementById("portInv").textContent="$"+fmt(ti);
+  document.getElementById("portPnl").textContent=`${tp>=0?"+":""}$${fmt(tp)} (${tpct.toFixed(1)}%)`;
+  document.getElementById("portPnl").className=tp>=0?"up":"down";
+}
+
+// ── WHALES ────────────────────────────────────────────────────
+function renderWhales(){
+  const coins=["BTC","ETH","SOL","XRP","DOGE","BNB"];
+  const prices={BTC:77530,ETH:3452,SOL:176,XRP:0.582,DOGE:0.161,BNB:582};
+  document.getElementById("whaleList").innerHTML=Array.from({length:4},()=>{
+    const c=coins[Math.floor(Math.random()*coins.length)];
+    const amt=rnd(50,2000,1); const usd=Math.round(amt*prices[c]);
+    const buy=Math.random()>.45; const ago=Math.floor(rnd(1,58,0));
+    return`<div class="whale-row">
+      <span class="whale-side ${buy?"up":"down"}">${buy?"🐋 ПОКУПКА":"🦈 ПРОДАЖА"} ${c}</span>
+      <span class="whale-amt">~$${usd.toLocaleString()} · ${ago}м</span></div>`;
+  }).join("");
+}
+
+// ── METRICS ───────────────────────────────────────────────────
+function updateMetrics(){
+  COINS.forEach(c=>{c.p=+(c.p*(1+rnd(-.003,.003))).toFixed(c.p>10?2:6);c.c=+(c.c+rnd(-.08,.08)).toFixed(2)});
+  const pairs=[
+    {id:"btc",coin:COINS[0],color:"#00d395"},{id:"eth",coin:COINS[1],color:"#7eb3ff"},
+    {id:"sol",coin:COINS[3],color:"#a78bfa"},{id:"doge",coin:COINS[6],color:"#fbbf24"}
+  ];
+  pairs.forEach(({id,coin,color})=>{
+    document.getElementById("m-"+id).textContent="$"+fmt(coin.p);
+    const chgEl=document.getElementById("mc-"+id);
+    chgEl.textContent=(coin.c>=0?"▲ +":"▼ ")+coin.c.toFixed(2)+"%";
+    chgEl.className="mcard-chg "+(coin.c>=0?"up":"down");
+  });
+  // Sparklines
+  [["btc","#00d395",77000],["eth","#7eb3ff",3400],["sol","#a78bfa",174],["doge","#fbbf24",0.158]].forEach(([id,col,base])=>{
+    const pts=Array.from({length:20},()=>base+rnd(-base*.02,base*.02));
+    drawSpark("sp-"+id,pts,col);
+  });
+  // Tape
+  document.getElementById("tp-btc").textContent="$"+fmt(COINS[0].p);
+  document.getElementById("tp-eth").textContent="$"+fmt(COINS[1].p);
+  const bc=COINS[0].c; const tc2=document.getElementById("tc-btc");
+  tc2.textContent=(bc>=0?"+":"")+bc.toFixed(2)+"%";
+  tc2.className="tape-chg "+(bc>=0?"up-bg":"down-bg");
+}
+
+// ── COMMANDS ─────────────────────────────────────────────────
+function renderCmds(){
+  document.getElementById("cmdGrid").innerHTML=CMDS.map(({c,d})=>
+    `<div class="cmd-item"><div class="cmd-name">${c}</div><div class="cmd-desc">${d}</div></div>`).join("");
+}
+
+// ── AUTO TOGGLE ───────────────────────────────────────────────
+function toggleAuto(){
+  autoOn=!autoOn;
+  const el=document.getElementById("autoToggle");
+  const txt=document.getElementById("autoStatusTxt");
+  el.className="toggle "+(autoOn?"on":"off");
+  txt.textContent=autoOn?"ВКЛ":"ВЫКЛ";
+  txt.className=autoOn?"up":"down";
+}
+
+// ── LAST SIGNAL ───────────────────────────────────────────────
+function updateSig(){
+  const s=SIGS[Math.floor(Math.random()*SIGS.length)];
+  const el=document.getElementById("lastSig");
+  el.textContent=s; el.className="signal-chip "+(s.includes("BUY")?"up-bg":"down-bg");
+}
+
+// ── REFRESH ALL ───────────────────────────────────────────────
+function refreshAll(){
+  updateMetrics(); updateRSI(); renderOB(); renderScreener();
+  renderWhales(); renderPort(); updateFG(); updateSig();
+  priceData=[...priceData.slice(1),+(priceData[priceData.length-1]*(1+rnd(-.003,.003))).toFixed(2)];
+  buildChart();
+  document.getElementById("lastUpdate").textContent="Обновлено: "+new Date().toLocaleTimeString("ru");
+}
+
+// ── INIT ─────────────────────────────────────────────────────
+window.addEventListener("load",()=>{
+  priceData=Array.from({length:60},(_,i)=>+(77000+Math.sin(i/7)*600+rnd(-120,120)).toFixed(2));
+  buildChart(); renderOB(); renderScreener(); renderWhales();
+  renderPort(); renderCmds(); updateRSI(); updateFG(); updateSig();
+  document.querySelectorAll(".mcard-spark").forEach(s=>s.getBoundingClientRect());
+  updateMetrics();
+  document.getElementById("lastUpdate").textContent="Обновлено: "+new Date().toLocaleTimeString("ru");
+  setInterval(refreshAll,4000);
+});
+</script>
+</body>
+</html>
