@@ -35,6 +35,7 @@ BINANCE_SECRET       = os.environ.get("BINANCE_SECRET",  "")
 USE_TESTNET          = os.environ.get("USE_TESTNET", "false").lower() == "true"
 PORT                 = int(os.environ.get("PORT", 8080))
 DASHBOARD_URL        = "https://arayik-bot.github.io/binance-bot/dashboard.html"
+CHART_URL            = "https://arayik-bot.github.io/binance-bot/chart.html"
 AUTO_CONFIRM_TIMEOUT = int(os.environ.get("AUTO_CONFIRM_TIMEOUT", "30"))
 
 TRADE_SIZES = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
@@ -344,7 +345,7 @@ def main_kb():
          InlineKeyboardButton("🐋 Киты",        callback_data="m_whale")],
         [InlineKeyboardButton("💳 Баланс",      callback_data="m_balance"),
          InlineKeyboardButton("ℹ️ Помощь",       callback_data="m_help")],
-        [InlineKeyboardButton("📊 Dashboard",    web_app=WebAppInfo(url=DASHBOARD_URL))],
+        [InlineKeyboardButton("📊 График",       web_app=WebAppInfo(url=CHART_URL))],
     ])
 
 def back(t="m_main"):

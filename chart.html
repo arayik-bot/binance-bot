@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Chart</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #0b1420;
+  color: #e2eaf5;
+  font-family: -apple-system, 'Helvetica Neue', sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── HEADER ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px 8px;
+  background: #0b1420;
+  border-bottom: 1px solid #1a2a3a;
+  flex-shrink: 0;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.coin-select {
+  background: #1a2a3a;
+  border: 1px solid #2a3a4a;
+  color: #e2eaf5;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-appearance: none;
+}
+.price-info { text-align: right; }
+.price-big { font-size: 18px; font-weight: 700; }
+.price-chg { font-size: 12px; margin-top: 1px; }
+.up { color: #26a69a; }
+.down { color: #ef5350; }
+
+/* ── INTERVAL BUTTONS ── */
+.intervals {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #0b1420;
+  flex-shrink: 0;
+}
+.iv-btn {
+  flex: 1;
+  padding: 7px 0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  background: #1a2a3a;
+  color: #7a8a9a;
+  transition: all .2s;
+}
+.iv-btn.active {
+  background: #26a69a;
+  color: white;
+}
+
+/* ── CANVAS ── */
+.chart-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  padding: 0 4px;
+}
+canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── RSI ── */
+.rsi-area {
+  height: 80px;
+  position: relative;
+  padding: 0 4px;
+  flex-shrink: 0;
+  border-top: 1px solid #1a2a3a;
+}
+.rsi-label {
+  position: absolute;
+  top: 4px;
+  left: 10px;
+  font-size: 10px;
+  color: #7a8a9a;
+  z-index: 1;
+}
+
+/* ── INFO BAR ── */
+.info-bar {
+  display: flex;
+  gap: 16px;
+  padding: 6px 16px 10px;
+  font-size: 11px;
+  color: #7a8a9a;
+  flex-shrink: 0;
+  background: #0b1420;
+  border-top: 1px solid #1a2a3a;
+}
+.info-item span { color: #e2eaf5; font-weight: 600; }
+
+/* ── LOADING ── */
+.loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b1420;
+  font-size: 14px;
+  color: #7a8a9a;
+  z-index: 10;
+}
+.spinner {
+  width: 24px; height: 24px;
+  border: 3px solid #1a2a3a;
+  border-top-color: #26a69a;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  margin-right: 10px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <select class="coin-select" id="coinSelect" onchange="changeCoin()">
+      <option value="BTCUSDT">BTC/USDT</option>
+      <option value="ETHUSDT">ETH/USDT</option>
+      <option value="BNBUSDT">BNB/USDT</option>
+      <option value="SOLUSDT">SOL/USDT</option>
+      <option value="XRPUSDT">XRP/USDT</option>
+      <option value="ADAUSDT">ADA/USDT</option>
+      <option value="DOGEUSDT">DOGE/USDT</option>
+      <option value="AVAXUSDT">AVAX/USDT</option>
+      <option value="DOTUSDT">DOT/USDT</option>
+      <option value="LINKUSDT">LINK/USDT</option>
+      <option value="LTCUSDT">LTC/USDT</option>
+      <option value="UNIUSDT">UNI/USDT</option>
+      <option value="ATOMUSDT">ATOM/USDT</option>
+      <option value="NEARUSDT">NEAR/USDT</option>
+      <option value="MATICUSDT">MATIC/USDT</option>
+    </select>
+  </div>
+  <div class="price-info">
+    <div class="price-big" id="priceEl">—</div>
+    <div class="price-chg" id="chgEl">—</div>
+  </div>
+</div>
+
+<!-- INTERVALS -->
+<div class="intervals">
+  <button class="iv-btn" onclick="setIv('15m')" id="b15m">15m</button>
+  <button class="iv-btn active" onclick="setIv('1h')" id="b1h">1h</button>
+  <button class="iv-btn" onclick="setIv('4h')" id="b4h">4h</button>
+  <button class="iv-btn" onclick="setIv('1d')" id="b1d">1d</button>
+  <button class="iv-btn" onclick="setIv('1w')" id="b1w">1w</button>
+</div>
+
+<!-- MAIN CHART -->
+<div class="chart-area">
+  <div class="loading" id="loading"><div class="spinner"></div>Загрузка...</div>
+  <canvas id="cvMain"></canvas>
+</div>
+
+<!-- RSI -->
+<div class="rsi-area">
+  <div class="rsi-label" id="rsiLabel">RSI(14): —</div>
+  <canvas id="cvRsi"></canvas>
+</div>
+
+<!-- INFO BAR -->
+<div class="info-bar">
+  <div class="info-item">O: <span id="iO">—</span></div>
+  <div class="info-item">H: <span id="iH">—</span></div>
+  <div class="info-item">L: <span id="iL">—</span></div>
+  <div class="info-item">C: <span id="iC">—</span></div>
+  <div class="info-item">Vol: <span id="iV">—</span></div>
+</div>
+
+<script>
+// ── STATE ─────────────────────────────────────────────────────
+let symbol = "BTCUSDT";
+let interval = "1h";
+let klines = [];
+let mainCtx, rsiCtx;
+let mainW, mainH, rsiW, rsiH;
+let refreshTimer = null;
+
+const GREEN = "#26a69a";
+const RED   = "#ef5350";
+const BG    = "#0b1420";
+const GRID  = "#1a2a3a";
+const TEXT  = "#7a8a9a";
+const MA20C = "#f0b90b";
+const MA50C = "#ff9800";
+
+// ── INIT ──────────────────────────────────────────────────────
+window.addEventListener("load", () => {
+  mainCtx = document.getElementById("cvMain").getContext("2d");
+  rsiCtx  = document.getElementById("cvRsi").getContext("2d");
+  resize();
+  window.addEventListener("resize", resize);
+  loadData();
+  setInterval(loadData, 30000);
+});
+
+function resize() {
+  const mainArea = document.querySelector(".chart-area");
+  const rsiArea  = document.querySelector(".rsi-area");
+
+  mainW = mainArea.clientWidth;
+  mainH = mainArea.clientHeight;
+  rsiW  = rsiArea.clientWidth;
+  rsiH  = rsiArea.clientHeight;
+
+  const cvMain = document.getElementById("cvMain");
+  cvMain.width  = mainW * devicePixelRatio;
+  cvMain.height = mainH * devicePixelRatio;
+  cvMain.style.width  = mainW + "px";
+  cvMain.style.height = mainH + "px";
+  mainCtx.scale(devicePixelRatio, devicePixelRatio);
+
+  const cvRsi = document.getElementById("cvRsi");
+  cvRsi.width  = rsiW * devicePixelRatio;
+  cvRsi.height = rsiH * devicePixelRatio;
+  cvRsi.style.width  = rsiW + "px";
+  cvRsi.style.height = rsiH + "px";
+  rsiCtx.scale(devicePixelRatio, devicePixelRatio);
+
+  if (klines.length) drawAll();
+}
+
+// ── FETCH ─────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=60`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (!Array.isArray(data) || !data.length) return;
+    klines = data.map(k => ({
+      t: k[0], o: +k[1], h: +k[2], l: +k[3], c: +k[4], v: +k[5]
+    }));
+    document.getElementById("loading").style.display = "none";
+    drawAll();
+    updateHeader();
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+// ── UPDATE HEADER ─────────────────────────────────────────────
+function updateHeader() {
+  if (!klines.length) return;
+  const last = klines[klines.length - 1];
+  const first = klines[0];
+  const chg   = ((last.c - first.o) / first.o * 100);
+  const fmt = n => n >= 1 ? n.toLocaleString("en-US", {minimumFractionDigits:2,maximumFractionDigits:2})
+                          : n.toPrecision(4);
+  document.getElementById("priceEl").textContent = "$" + fmt(last.c);
+  document.getElementById("priceEl").className = "price-big " + (chg >= 0 ? "up" : "down");
+  document.getElementById("chgEl").textContent  = (chg >= 0 ? "▲ +" : "▼ ") + chg.toFixed(2) + "%";
+  document.getElementById("chgEl").className    = "price-chg " + (chg >= 0 ? "up" : "down");
+
+  document.getElementById("iO").textContent = fmt(last.o);
+  document.getElementById("iH").textContent = fmt(last.h);
+  document.getElementById("iL").textContent = fmt(last.l);
+  document.getElementById("iC").textContent = fmt(last.c);
+  const vol = last.v >= 1000 ? (last.v/1000).toFixed(1)+"K" : last.v.toFixed(0);
+  document.getElementById("iV").textContent = vol;
+}
+
+// ── MA ────────────────────────────────────────────────────────
+function calcMA(data, n) {
+  return data.map((_, i) => {
+    if (i < n - 1) return null;
+    return data.slice(i - n + 1, i + 1).reduce((a, b) => a + b, 0) / n;
+  });
+}
+
+// ── RSI ───────────────────────────────────────────────────────
+function calcRSI(closes, n = 14) {
+  const result = new Array(n).fill(null);
+  for (let i = n; i < closes.length; i++) {
+    const slice = closes.slice(i - n, i);
+    let g = 0, l = 0;
+    for (let j = 1; j < slice.length; j++) {
+      const d = slice[j] - slice[j-1];
+      if (d > 0) g += d; else l -= d;
+    }
+    const ag = g / n, al = l / n;
+    result.push(al === 0 ? 100 : +(100 - 100 / (1 + ag / al)).toFixed(2));
+  }
+  return result;
+}
+
+// ── DRAW ALL ──────────────────────────────────────────────────
+function drawAll() {
+  drawMain();
+  drawRSI();
+}
+
+// ── DRAW MAIN CHART ───────────────────────────────────────────
+function drawMain() {
+  const ctx = mainCtx;
+  const W = mainW, H = mainH;
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD_L = 4, PAD_R = 58, PAD_T = 14, PAD_B = 24;
+  const cW = W - PAD_L - PAD_R;
+  const cH = H - PAD_T - PAD_B;
+
+  const highs  = klines.map(k => k.h);
+  const lows   = klines.map(k => k.l);
+  const closes = klines.map(k => k.c);
+  const opens  = klines.map(k => k.o);
+
+  let hiMax = Math.max(...highs);
+  let loMin = Math.min(...lows);
+  const pad = (hiMax - loMin) * 0.06;
+  hiMax += pad; loMin -= pad;
+  const span = hiMax - loMin || 1;
+
+  const px = i => PAD_L + (i / (klines.length - 1)) * cW;
+  const py = v => PAD_T + (1 - (v - loMin) / span) * cH;
+
+  // Background
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = GRID;
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD_T + (i / 4) * cH;
+    ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+    const val = hiMax - (i / 4) * span;
+    ctx.fillStyle = TEXT;
+    ctx.font = "10px -apple-system,sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(val >= 1 ? val.toLocaleString("en-US",{maximumFractionDigits:2}) : val.toPrecision(4),
+                 W - PAD_R + 4, y + 3);
+  }
+
+  // MA lines
+  const ma20 = calcMA(closes, 20);
+  const ma50 = calcMA(closes, 50);
+
+  [[ma20, MA20C, "MA20"], [ma50, MA50C, "MA50"]].forEach(([ma, color, lbl]) => {
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    let first = true;
+    ma.forEach((v, i) => {
+      if (v === null) return;
+      first ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v));
+      first = false;
+    });
+    ctx.stroke();
+  });
+
+  // MA legend
+  ctx.font = "bold 10px -apple-system,sans-serif";
+  ctx.fillStyle = MA20C; ctx.textAlign = "left";
+  ctx.fillText("MA20", W - PAD_R + 4, PAD_T + cH + 12);
+  // (skip MA50 label to save space)
+
+  // Candles
+  const candleW = Math.max(1, cW / klines.length * 0.65);
+
+  klines.forEach((k, i) => {
+    const bull = k.c >= k.o;
+    const color = bull ? GREEN : RED;
+    const x = px(i);
+
+    // Wick
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(0.8, candleW * 0.15);
+    ctx.moveTo(x, py(k.h));
+    ctx.lineTo(x, py(k.l));
+    ctx.stroke();
+
+    // Body
+    const bodyTop = py(Math.max(k.o, k.c));
+    const bodyBot = py(Math.min(k.o, k.c));
+    const bodyH   = Math.max(1, bodyBot - bodyTop);
+    ctx.fillStyle = color;
+    ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
+  });
+
+  // Last price line
+  const lastPrice = klines[klines.length - 1].c;
+  const lastY = py(lastPrice);
+  ctx.beginPath();
+  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = klines[klines.length-1].c >= klines[klines.length-1].o ? GREEN : RED;
+  ctx.lineWidth = 0.8;
+  ctx.moveTo(PAD_L, lastY);
+  ctx.lineTo(W - PAD_R, lastY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Last price tag
+  const fmt2 = n => n >= 1 ? n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}) : n.toPrecision(4);
+  const tagColor = klines[klines.length-1].c >= klines[klines.length-1].o ? GREEN : RED;
+  ctx.fillStyle = tagColor;
+  ctx.fillRect(W - PAD_R, lastY - 9, PAD_R - 2, 18);
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 10px -apple-system,sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText(fmt2(lastPrice), W - PAD_R/2 - 1, lastY + 3);
+}
+
+// ── DRAW RSI ──────────────────────────────────────────────────
+function drawRSI() {
+  const ctx = rsiCtx;
+  const W = rsiW, H = rsiH;
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD_L = 4, PAD_R = 58, PAD_T = 16, PAD_B = 4;
+  const cW = W - PAD_L - PAD_R;
+  const cH = H - PAD_T - PAD_B;
+
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  const closes = klines.map(k => k.c);
+  const rsi    = calcRSI(closes);
+
+  const px = i => PAD_L + (i / (klines.length - 1)) * cW;
+  const py = v => PAD_T + (1 - v / 100) * cH;
+
+  // Grid lines at 30/70
+  [30, 70].forEach(v => {
+    ctx.beginPath();
+    ctx.strokeStyle = v === 70 ? "rgba(239,83,80,.3)" : "rgba(38,166,154,.3)";
+    ctx.lineWidth = 0.8;
+    ctx.setLineDash([3, 3]);
+    ctx.moveTo(PAD_L, py(v)); ctx.lineTo(W - PAD_R, py(v));
+    ctx.stroke();
+    ctx.fillStyle = TEXT; ctx.font = "9px -apple-system,sans-serif";
+    ctx.textAlign = "left"; ctx.fillText(v, W - PAD_R + 4, py(v) + 3);
+    ctx.setLineDash([]);
+  });
+
+  // RSI fill
+  const validRsi = rsi.filter(v => v !== null);
+  const lastRsi  = validRsi[validRsi.length - 1];
+
+  ctx.beginPath();
+  let first = true;
+  rsi.forEach((v, i) => {
+    if (v === null) return;
+    first ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v));
+    first = false;
+  });
+  ctx.strokeStyle = "#a78bfa";
+  ctx.lineWidth   = 1.5;
+  ctx.stroke();
+
+  // RSI label
+  const rsiColor = lastRsi < 30 ? GREEN : lastRsi > 70 ? RED : "#a78bfa";
+  document.getElementById("rsiLabel").textContent =
+    `RSI(14): ${lastRsi ? lastRsi.toFixed(1) : "—"}` +
+    (lastRsi < 30 ? "  Перепродан" : lastRsi > 70 ? "  Перекуплен" : "");
+  document.getElementById("rsiLabel").style.color = rsiColor;
+}
+
+// ── CONTROLS ──────────────────────────────────────────────────
+function setIv(iv) {
+  interval = iv;
+  ["15m","1h","4h","1d","1w"].forEach(i => {
+    document.getElementById("b"+i).className = "iv-btn" + (i === iv ? " active" : "");
+  });
+  document.getElementById("loading").style.display = "flex";
+  klines = [];
+  loadData();
+}
+
+function changeCoin() {
+  symbol = document.getElementById("coinSelect").value;
+  document.getElementById("loading").style.display = "flex";
+  klines = [];
+  loadData();
+}
+</script>
+</body>
+</html>
