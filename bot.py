@@ -531,9 +531,27 @@ async def do_auto_trade(uid,chat_id,coin,ctx):
     USER_DATA[uid]["chat_id"]=chat_id
     ta=compute_ta(coin); t=get_price(coin); p=t.get("price",0)
     ttype=USER_DATA[uid]["auto_type"]; amount=USER_DATA[uid]["auto_size"]
-    if ta["score"]>=2: side="BUY"
-    elif ta["score"]<=-2: side="SELL"
-    else: return
+    if ta["score"]>=2:
+        side="BUY"
+    elif ta["score"]<=-2:
+        # Only SELL if we actually have this coin
+        s=sym(coin)
+        bals=get_real_balance()
+        bals.pop("_error",None); bals.pop("_mock",None)
+        coin_upper=coin.upper().replace("USDT","")
+        has_coin=bals.get(coin_upper,0)
+        # Also check local portfolio
+        local_qty=USER_DATA[uid]["portfolio"].get(s,{}).get("qty",0)
+        actual_qty=max(has_coin,local_qty)
+        if actual_qty<=0.000001:
+            return  # Don't SELL if we don't have it
+        side="SELL"
+        # Calculate sell amount based on actual holdings
+        sell_val=actual_qty*p
+        amount=min(amount, sell_val*0.99)  # sell max 99% of holdings
+        if amount<5: return  # skip if too small
+    else:
+        return
     se="🛒" if side=="BUY" else "💰"
     rows=[]; row=[]
     for s in TRADE_SIZES:
