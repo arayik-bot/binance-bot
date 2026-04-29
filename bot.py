@@ -1427,16 +1427,127 @@ async def grid_job(ctx):
                                 parse_mode=ParseMode.MARKDOWN)
                         except: pass
 
+async def do_auto_trade_direct(uid, chat_id, coin, side, amount, ta, ctx):
+    """Smart auto-trade with full context info."""
+    USER_DATA[uid]["chat_id"] = chat_id
+    t = get_price(coin); p = t.get("price", 0)
+    ttype = USER_DATA[uid]["auto_type"]
+    se = "🛒" if side == "BUY" else "💰"
+    action = "КУПИТЬ" if side == "BUY" else "ПРОДАТЬ"
+
+    rows = []; row = []
+    for s in TRADE_SIZES:
+        if s > amount * 1.1: continue  # don't show sizes bigger than balance
+        row.append(InlineKeyboardButton(
+            f"${s}", callback_data=f"oktr__{side.lower()}__{coin.upper()}__{s}__{ttype}"))
+        if len(row) == 5: rows.append(row); row = []
+    if row: rows.append(row)
+    # Add exact amount button
+    rows.append([InlineKeyboardButton(
+        f"💯 Всё: ${amount:.2f}",
+        callback_data=f"oktr__{side.lower()}__{coin.upper()}__{round(amount,2)}__{ttype}")])
+    rows.append([InlineKeyboardButton(
+        f"⏳ Авто ${round(amount,2)} через {AUTO_CONFIRM_TIMEOUT}с", callback_data="noop")])
+    rows.append([InlineKeyboardButton("❌ Пропустить", callback_data="cancel_trade")])
+
+    msg_txt = (
+        f"🤖 *Авто-сигнал*\n\n"
+        f"Монета:  *{coin.upper()}USDT*\n"
+        f"Тип:     {TRADE_TYPES.get(ttype,'')}\n"
+        f"Цена:    `${p:,.4f}`\n"
+        f"Сигнал:  {ta['signal']}\n"
+        f"RSI:     `{ta['rsi']}`\n"
+        f"Доступно: `${amount:.2f}`\n\n"
+        f"{se} Предложение: *{action}*\n"
+        f"Выберите сумму или ждите {AUTO_CONFIRM_TIMEOUT}с:"
+    )
+    sent = await ctx.bot.send_message(chat_id, msg_txt,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup(rows))
+
+    USER_DATA[uid]["pending_trade"] = {
+        "coin": coin, "side": side, "amount": round(amount, 2),
+        "msg_id": sent.message_id, "timestamp": time.time(),
+        "chat_id": chat_id, "ttype": ttype
+    }
+    ctx.job_queue.run_once(_auto_job, when=AUTO_CONFIRM_TIMEOUT,
+        data={"uid": uid, "coin": coin, "side": side,
+              "amount": round(amount, 2), "msg_id": sent.message_id, "ttype": ttype},
+        name=f"auto_{uid}")
+
+
 async def auto_job(ctx):
     for uid,data in list(USER_DATA.items()):
         if not data.get("auto_enabled"): continue
         if not data.get("chat_id"):      continue
         if data.get("pending_trade"):    continue
-        coins=data["auto_coins"] or TOP_COINS
-        coin=random.choice(coins); ta=compute_ta(coin)
-        if abs(ta["score"])>=2:
-            await do_auto_trade(uid,data["chat_id"],coin,ctx)
-            await asyncio.sleep(1)
+
+        # ── Get real balance ──────────────────────────────────
+        bals = get_real_balance()
+        bals.pop("_error", None)
+        is_mock = bals.pop("_mock", None)
+        usdt = bals.get("USDT", 0)
+
+        # ── What coins does user hold? ─────────────────────────
+        held_coins = []
+        for asset, qty in bals.items():
+            if asset == "USDT": continue
+            if qty > 0.000001:
+                held_coins.append(asset)
+
+        has_usdt = usdt >= 5  # minimum to buy
+
+        # ── Scan held coins for SELL signal ───────────────────
+        best_sell_coin = None; best_sell_ta = None; best_sell_score = 0
+        for asset in held_coins:
+            coin_name = asset.replace("USDT","")
+            if coin_name not in TOP_COINS: continue
+            ta = compute_ta(coin_name)
+            if ta["score"] <= -2 and abs(ta["score"]) > abs(best_sell_score):
+                best_sell_score = ta["score"]
+                best_sell_coin  = coin_name
+                best_sell_ta    = ta
+
+        # ── If no USDT and no held coins → skip ───────────────
+        if not has_usdt and not held_coins:
+            log.info(f"[AutoBot uid={uid}] No USDT, no holdings — skipping")
+            continue
+
+        # ── Priority 1: SELL signal on held coin ──────────────
+        if best_sell_coin and best_sell_ta:
+            t = get_price(best_sell_coin)
+            price = t.get("price", 0)
+            asset_qty = bals.get(best_sell_coin, 0)
+            sell_val  = asset_qty * price * 0.99
+            amount    = min(data["auto_size"], sell_val)
+            if amount >= 5:
+                log.info(f"[AutoBot uid={uid}] SELL signal {best_sell_coin}, score={best_sell_score}")
+                await do_auto_trade_direct(uid, data["chat_id"], best_sell_coin,
+                                           "SELL", amount, best_sell_ta, ctx)
+                await asyncio.sleep(1)
+                continue
+
+        # ── Priority 2: BUY signal if has USDT ────────────────
+        if has_usdt:
+            coins = data["auto_coins"] or TOP_COINS
+            best_buy_coin = None; best_buy_ta = None; best_buy_score = 0
+            for coin in coins:
+                ta = compute_ta(coin)
+                if ta["score"] >= 2 and ta["score"] > best_buy_score:
+                    best_buy_score = ta["score"]
+                    best_buy_coin  = coin
+                    best_buy_ta    = ta
+            if best_buy_coin:
+                amount = min(data["auto_size"], usdt * 0.95)
+                if amount >= 5:
+                    log.info(f"[AutoBot uid={uid}] BUY signal {best_buy_coin}, score={best_buy_score}")
+                    await do_auto_trade_direct(uid, data["chat_id"], best_buy_coin,
+                                               "BUY", amount, best_buy_ta, ctx)
+                    await asyncio.sleep(1)
+                    continue
+
+        # ── No signals ────────────────────────────────────────
+        log.info(f"[AutoBot uid={uid}] No signals. USDT=${usdt:.2f}, Holdings={held_coins}")
 
 # ── HEALTH SERVER ─────────────────────────────────────────────────
 class H(BaseHTTPRequestHandler):
