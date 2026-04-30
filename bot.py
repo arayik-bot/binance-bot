@@ -502,16 +502,49 @@ async def do_trade(source, ctx, coin, side, amount,
     update_portfolio(uid,order); record_order(uid,order,note)
     mt=" _(Демо)_" if order.get("mock") else (" _(Testnet)_" if USE_TESTNET else "")
     se="🛒 КУПЛЕНО" if side=="BUY" else "💰 ПРОДАНО"
-    await ctx.bot.send_message(chat_id,
-        f"✅ *Сделка исполнена*{mt}\n\n"
-        f"{se} *{order['symbol']}*\n"
-        f"Тип:    {TRADE_TYPES.get(order.get('type','spot'),'')}\n"
-        f"Кол-во: `{order['qty']:.6f}`\n"
-        f"Цена:   `${order['price']:,.4f}`\n"
-        f"Итого:  `${order['total']:.2f}`\n"
-        f"ID:     `{order['orderId']}`"
-        +(f"\n🤖 _{note}_" if note else ""),
-        parse_mode=ParseMode.MARKDOWN,reply_markup=back())
+
+    # ── Auto SL/TP suggestion after BUY ──────────────────────
+    if side=="BUY":
+        exec_price = order["price"]
+        sl_price   = round(exec_price * 0.97, 6)  # -3%
+        tp_price   = round(exec_price * 1.05, 6)  # +5%
+        coin_clean = order["symbol"].replace("USDT","")
+
+        sl_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                f"✅ Да — SL -3% (${sl_price:,.4f}) + TP +5% (${tp_price:,.4f})",
+                callback_data=f"set_sltp__{coin_clean}__{sl_price}__{tp_price}__{chat_id}")],
+            [InlineKeyboardButton("⚙️ Своя %",
+                callback_data=f"set_sltp_custom__{coin_clean}__{exec_price}"),
+             InlineKeyboardButton("❌ Без SL/TP",
+                callback_data="noop")],
+        ])
+
+        await ctx.bot.send_message(chat_id,
+            f"✅ *Сделка исполнена*{mt}\n\n"
+            f"{se} *{order['symbol']}*\n"
+            f"Тип:    {TRADE_TYPES.get(order.get('type','spot'),'')}\n"
+            f"Кол-во: `{order['qty']:.6f}`\n"
+            f"Цена:   `${order['price']:,.4f}`\n"
+            f"Итого:  `${order['total']:.2f}`\n"
+            f"ID:     `{order['orderId']}`"
+            +(f"\n🤖 _{note}_" if note else "")
+            +f"\n\n━━━━━━━━━━━━━━━━\n"
+            f"🛡 *Установить защиту?*\n"
+            f"🛑 SL: `${sl_price:,.4f}` (-3%)\n"
+            f"🎯 TP: `${tp_price:,.4f}` (+5%)",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=sl_kb)
+    else:
+        await ctx.bot.send_message(chat_id,
+            f"✅ *Сделка исполнена*{mt}\n\n"
+            f"{se} *{order['symbol']}*\n"
+            f"Тип:    {TRADE_TYPES.get(order.get('type','spot'),'')}\n"
+            f"Кол-во: `{order['qty']:.6f}`\n"
+            f"Цена:   `${order['price']:,.4f}`\n"
+            f"Итого:  `${order['total']:.2f}`\n"
+            f"ID:     `{order['orderId']}`"
+            +(f"\n🤖 _{note}_" if note else ""),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=back())
 
 async def _auto_job(ctx):
     d=ctx.job.data; uid=d["uid"]
@@ -922,6 +955,38 @@ async def text_handler(u,c):
         except:
             await u.message.reply_text("❌ Введите число: `70000`",parse_mode=ParseMode.MARKDOWN)
         return
+    if w.get("type")=="custom_sltp":
+        try:
+            parts_in = text.strip().split()
+            if len(parts_in) < 2: raise ValueError
+            sl_pct = float(parts_in[0])
+            tp_pct = float(parts_in[1])
+            if sl_pct<=0 or tp_pct<=0: raise ValueError
+        except:
+            await u.message.reply_text(
+                "❌ Формат: `3 5` — SL% и TP%\nПример: `3 5` = SL-3% TP+5%",
+                parse_mode=ParseMode.MARKDOWN); return
+        coin_c     = w["coin"]
+        exec_price = w["exec_price"]
+        chat_id_t  = w["chat_id"]
+        sl_price   = round(exec_price * (1 - sl_pct/100), 6)
+        tp_price   = round(exec_price * (1 + tp_pct/100), 6)
+        s = sym(coin_c)
+        USER_DATA[uid]["alerts"].append({
+            "symbol": s, "condition": "below",
+            "price": sl_price, "chat_id": chat_id_t, "type": "sl"})
+        USER_DATA[uid]["alerts"].append({
+            "symbol": s, "condition": "above",
+            "price": tp_price, "chat_id": chat_id_t, "type": "tp"})
+        USER_DATA[uid]["waiting_input"] = None
+        t = get_price(coin_c)
+        await u.message.reply_text(
+            f"✅ *SL/TP установлены!*\n\n"
+            f"🛑 Stop-Loss:   `${sl_price:,.4f}` (-{sl_pct}%)\n"
+            f"🎯 Take-Profit: `${tp_price:,.4f}` (+{tp_pct}%)",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=back())
+        return
+
     if w.get("type") in ("buy_amount","sell_amount","auto_size"):
         try:
             amount=float(text.replace("$","").replace(",","."))
@@ -1330,6 +1395,54 @@ async def cb(u,c):
         await q.edit_message_text("🗑 Алерты удалены.",reply_markup=back("m_main"))
 
     elif d=="noop": pass
+
+    # ── AUTO SL/TP AFTER BUY ─────────────────────────────────
+    elif d.startswith("set_sltp__"):
+        parts    = d.split("__")
+        coin_c   = parts[1]
+        sl_price = float(parts[2])
+        tp_price = float(parts[3])
+        chat_id_t= int(parts[4])
+        s        = sym(coin_c)
+        # Set SL alert
+        USER_DATA[uid]["alerts"].append({
+            "symbol": s, "condition": "below",
+            "price": sl_price, "chat_id": chat_id_t, "type": "sl"})
+        # Set TP alert
+        USER_DATA[uid]["alerts"].append({
+            "symbol": s, "condition": "above",
+            "price": tp_price, "chat_id": chat_id_t, "type": "tp"})
+        t = get_price(coin_c)
+        cur = t.get("price", 0)
+        await q.edit_message_text(
+            f"✅ *SL/TP установлены!*\n\n"
+            f"Монета:  *{s}*\n"
+            f"Текущая: `${cur:,.4f}`\n\n"
+            f"🛑 Stop-Loss:  `${sl_price:,.4f}` (-3%)\n"
+            f"🎯 Take-Profit: `${tp_price:,.4f}` (+5%)\n\n"
+            f"_Бот уведомит при достижении цены_",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=back())
+
+    elif d.startswith("set_sltp_custom__"):
+        parts      = d.split("__")
+        coin_c     = parts[1]
+        exec_price = float(parts[2])
+        USER_DATA[uid]["waiting_input"] = {
+            "type": "custom_sltp",
+            "coin": coin_c,
+            "exec_price": exec_price,
+            "chat_id": u.effective_chat.id
+        }
+        await q.edit_message_text(
+            f"⚙️ *Своя SL/TP для {coin_c}*\n\n"
+            f"Цена покупки: `${exec_price:,.4f}`\n\n"
+            f"Введите в формате:\n"
+            f"`3 5` — SL -3%, TP +5%\n"
+            f"`2 10` — SL -2%, TP +10%\n"
+            f"`5 15` — SL -5%, TP +15%",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отмена", callback_data="m_main")]]))
 
 # ══════════════════════════════════════════════════════════════════
 #  BACKGROUND JOBS
