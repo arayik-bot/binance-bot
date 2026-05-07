@@ -51,11 +51,25 @@ TOP_COINS   = ["BTC","ETH","BNB","SOL","XRP","ADA","DOGE","AVAX",
 TRADE_TYPES = {"spot":"📈 Спот","futures":"🔮 Фьючерсы","margin":"💳 Маржа"}
 
 # ── PRICE CACHE ───────────────────────────────────────────────────
-_price_cache   = {}
-_price_cache_ttl = 30
-_balance_cache = {}
-_balance_cache_ts = 0
-_balance_cache_ttl = 60
+_price_cache     = {}
+_price_cache_ttl = 60      # 30 → 60 сек: вдвое меньше запросов
+_balance_cache   = {}
+_balance_cache_ts  = 0
+_balance_cache_ttl = 120   # 60 → 120 сек: баланс реже
+
+# ── RATE LIMITER — не более 8 запросов в секунду ──────────────────
+_rl_lock      = None   # asyncio.Lock (создаётся в main())
+_rl_last_req  = 0.0
+_rl_min_gap   = 0.15   # минимум 150мс между запросами
+
+def _rate_limit():
+    """Синхронная пауза между API запросами."""
+    global _rl_last_req
+    now  = time.time()
+    diff = now - _rl_last_req
+    if diff < _rl_min_gap:
+        time.sleep(_rl_min_gap - diff)
+    _rl_last_req = time.time()
 
 # ── STATE ─────────────────────────────────────────────────────────
 def default_user():
@@ -105,7 +119,7 @@ SCALPER_STATE = {
         "volume_mult":       1.5,    # Volume spike multiplier
         "max_positions":     3,
         "daily_loss_limit":  50.0,   # Stop bot if daily loss > $X
-        "loop_sleep":        15,     # Check interval (seconds)
+        "loop_sleep":        45,     # 15→45 сек, меньше запросов
         "ema_fast":          9,
         "ema_slow":          21,
     }
@@ -265,11 +279,18 @@ def get_price(coin):
         if now-ts<_price_cache_ttl: return cached
     if bc:
         try:
-            t=bc.get_ticker(symbol=s)
-            result={"symbol":s,"price":float(t["lastPrice"]),
-                    "change":float(t["priceChangePercent"]),
-                    "high":float(t["highPrice"]),"low":float(t["lowPrice"]),
-                    "volume":float(t["volume"])}
+            _rate_limit()
+            t=bc.get_symbol_ticker(symbol=s)   # weight=2 (дешевле get_ticker)
+            result={"symbol":s,"price":float(t["price"]),
+                    "change":0.0,"high":0.0,"low":0.0,"volume":0.0}
+            # Дополнительные данные только если кэш совсем пуст
+            try:
+                stats=bc.get_ticker(symbol=s)
+                result.update({"change":float(stats["priceChangePercent"]),
+                                "high":float(stats["highPrice"]),
+                                "low":float(stats["lowPrice"]),
+                                "volume":float(stats["volume"])})
+            except: pass
             _price_cache[s]=(result,now); return result
         except Exception as e:
             if "1003" in str(e) or "banned" in str(e).lower():
@@ -302,10 +323,12 @@ def get_all_prices():
         except: pass
     return {sym(c):get_price(c) for c in TOP_COINS}
 
-def get_klines(coin,interval="1h",limit=120):
+def get_klines(coin,interval="1h",limit=60):  # limit 120→60
     s=sym(coin)
     if bc:
-        try: return bc.get_klines(symbol=s,interval=interval,limit=limit)
+        try:
+            _rate_limit()
+            return bc.get_klines(symbol=s,interval=interval,limit=limit)
         except: pass
     base=MOCK.get(s,50.0); data=[]; t=int(time.time()*1000)-limit*3600000
     for _ in range(limit):
@@ -1861,7 +1884,13 @@ async def alerts_job(ctx):
                         except Exception as e: log.error(f"Trail execute: {e}")
 
 async def auto_job(ctx):
-    """Smart auto-trade — balance aware."""
+    """Smart auto-trade — balance aware. Rate-limit friendly."""
+    # Пре-кеш всех цен ОДНИМ запросом перед циклом
+    try:
+        get_all_prices()
+        await asyncio.sleep(1.0)
+    except: pass
+
     for uid,data in list(USER_DATA.items()):
         if not data.get("auto_enabled"): continue
         if not data.get("chat_id"):      continue
@@ -1875,7 +1904,7 @@ async def auto_job(ctx):
         # Risk check
         ok,reason=check_risk(uid,data["auto_size"])
         if not ok and "баланс" not in reason.lower():
-            continue  # stop all trading if risk exceeded
+            continue
 
         # SELL scan — only held coins
         best_sell=None; best_sell_ta=None; best_sell_score=0
@@ -1883,7 +1912,7 @@ async def auto_job(ctx):
             ta=compute_ta(asset)
             if ta["score"]<=-3 and abs(ta["score"])>abs(best_sell_score):
                 best_sell_score=ta["score"]; best_sell=asset; best_sell_ta=ta
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)   # 0.5→1.0 сек
 
         if best_sell and best_sell_ta:
             t=get_price(best_sell); price=t.get("price",0)
@@ -1891,28 +1920,28 @@ async def auto_job(ctx):
             amount=min(data["auto_size"],sell_val)
             if amount>=5:
                 await do_auto_trade_direct(uid,data["chat_id"],best_sell,"SELL",amount,best_sell_ta,ctx)
-                await asyncio.sleep(2); continue
+                await asyncio.sleep(3); continue
 
         # BUY scan — only if has USDT
         if has_usdt:
             coins=data["auto_coins"] or TOP_COINS
             # Rotate coins to avoid always scanning same ones
             idx=data.get("scan_idx",0)
-            scan=coins[idx:idx+5] or coins[:5]
-            data["scan_idx"]=(idx+5)%max(len(coins),1)
+            scan=coins[idx:idx+3] or coins[:3]   # 5→3 монеты за раз
+            data["scan_idx"]=(idx+3)%max(len(coins),1)
 
             best_buy=None; best_buy_ta=None; best_buy_score=0
             for coin in scan:
                 ta=compute_ta(coin)
                 if ta["score"]>=3 and ta["score"]>best_buy_score:
                     best_buy_score=ta["score"]; best_buy=coin; best_buy_ta=ta
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)   # 0.5→1.0 сек
 
             if best_buy:
                 amount=min(data["auto_size"],usdt*0.95)
                 if amount>=5:
                     await do_auto_trade_direct(uid,data["chat_id"],best_buy,"BUY",amount,best_buy_ta,ctx)
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)   # 2→3 сек
 
 # ══════════════════════════════════════════════════════════════════
 #  SCALPER ENGINE — EMA(9/21) Cross + RSI + Volume  [1m Futures]
@@ -2281,12 +2310,12 @@ async def main():
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
-    app.job_queue.run_repeating(alerts_job,      interval=60,   first=15)
-    app.job_queue.run_repeating(auto_job,         interval=600,  first=120)
-    app.job_queue.run_repeating(dca_job,          interval=300,  first=90)
-    app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
-    app.job_queue.run_repeating(change_alert_job, interval=300,  first=60)
-    app.job_queue.run_repeating(save_state_job,   interval=60,   first=30)  # 💾 автосохранение
+    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
+    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
+    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
+    app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
+    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
+    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
     log.info("🚀 Bot v8.0 started!")
     async with app:
         await app.initialize(); await app.start()
