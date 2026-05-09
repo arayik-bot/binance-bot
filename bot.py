@@ -2028,7 +2028,6 @@ async def alerts_job(ctx):
 
 async def auto_job(ctx):
     """Smart auto-trade — balance aware. Rate-limit friendly."""
-    # Пре-кеш всех цен ОДНИМ запросом перед циклом
     try:
         get_all_prices()
         await asyncio.sleep(1.0)
@@ -2039,52 +2038,66 @@ async def auto_job(ctx):
         if not data.get("chat_id"):      continue
         if data.get("pending_trade"):    continue
 
+        chat_id=data["chat_id"]
         bals=get_real_balance(); bals.pop("_error",None); bals.pop("_mock",None)
         usdt=bals.get("USDT",0)
         held_coins=[a for a,q in bals.items() if a!="USDT" and a in TOP_COINS and q>0.000001]
         has_usdt=usdt>=5
 
-        # Risk check
         ok,reason=check_risk(uid,data["auto_size"])
         if not ok and "баланс" not in reason.lower():
+            await ctx.bot.send_message(chat_id,
+                f"🤖 Авто-трейд: ⚠️ {reason}", parse_mode=ParseMode.MARKDOWN)
             continue
 
-        # SELL scan — only held coins
+        # SELL scan
         best_sell=None; best_sell_ta=None; best_sell_score=0
         for asset in held_coins:
             ta=compute_ta(asset)
-            if ta["score"]<=-3 and abs(ta["score"])>abs(best_sell_score):
+            if ta["score"]<=-2 and abs(ta["score"])>abs(best_sell_score):
                 best_sell_score=ta["score"]; best_sell=asset; best_sell_ta=ta
-            await asyncio.sleep(1.0)   # 0.5→1.0 сек
+            await asyncio.sleep(1.0)
 
         if best_sell and best_sell_ta:
             t=get_price(best_sell); price=t.get("price",0)
             qty=bals.get(best_sell,0); sell_val=qty*price*0.99
             amount=min(data["auto_size"],sell_val)
             if amount>=5:
-                await do_auto_trade_direct(uid,data["chat_id"],best_sell,"SELL",amount,best_sell_ta,ctx)
+                await do_auto_trade_direct(uid,chat_id,best_sell,"SELL",amount,best_sell_ta,ctx)
                 await asyncio.sleep(3); continue
 
-        # BUY scan — only if has USDT
+        # BUY scan
         if has_usdt:
             coins=data["auto_coins"] or TOP_COINS
-            # Rotate coins to avoid always scanning same ones
             idx=data.get("scan_idx",0)
-            scan=coins[idx:idx+3] or coins[:3]   # 5→3 монеты за раз
+            scan=coins[idx:idx+3] or coins[:3]
             data["scan_idx"]=(idx+3)%max(len(coins),1)
 
             best_buy=None; best_buy_ta=None; best_buy_score=0
             for coin in scan:
                 ta=compute_ta(coin)
-                if ta["score"]>=3 and ta["score"]>best_buy_score:
+                if ta["score"]>=2 and ta["score"]>best_buy_score:
                     best_buy_score=ta["score"]; best_buy=coin; best_buy_ta=ta
-                await asyncio.sleep(1.0)   # 0.5→1.0 сек
+                await asyncio.sleep(1.0)
 
             if best_buy:
                 amount=min(data["auto_size"],usdt*0.95)
                 if amount>=5:
-                    await do_auto_trade_direct(uid,data["chat_id"],best_buy,"BUY",amount,best_buy_ta,ctx)
-                    await asyncio.sleep(3)   # 2→3 сек
+                    await do_auto_trade_direct(uid,chat_id,best_buy,"BUY",amount,best_buy_ta,ctx)
+                    await asyncio.sleep(3)
+            else:
+                # Уведомление — сканировал, сигналов нет
+                top_scores=[]
+                for coin in scan:
+                    ta=compute_ta(coin)
+                    top_scores.append(f"{coin}: {ta['score']:+d}")
+                    await asyncio.sleep(0.5)
+                await ctx.bot.send_message(chat_id,
+                    f"🔍 *Авто-сканирование*\n"
+                    f"Монеты: {', '.join(scan)}\n"
+                    f"Сигналов нет (нужен score ≥2)\n"
+                    f"Scores: {' | '.join(top_scores)}",
+                    parse_mode=ParseMode.MARKDOWN)
 
 # ══════════════════════════════════════════════════════════════════
 #  SCALPER ENGINE — EMA(9/21) Cross + RSI + Volume  [1m Futures]
@@ -2454,12 +2467,12 @@ async def main():
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
-    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
-    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
-    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
-    app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
-    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
-    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
+    app.job_queue.run_repeating(alerts_job,      interval=120,  first=30)
+    app.job_queue.run_repeating(auto_job,         interval=600,  first=60)   # 10 мин
+    app.job_queue.run_repeating(dca_job,          interval=900,  first=180)
+    app.job_queue.run_repeating(daily_report_job, interval=3600, first=300)
+    app.job_queue.run_repeating(change_alert_job, interval=900,  first=120)
+    app.job_queue.run_repeating(save_state_job,   interval=180,  first=90)
     log.info("🚀 Bot v8.0 started!")
     async with app:
         await app.initialize(); await app.start()
