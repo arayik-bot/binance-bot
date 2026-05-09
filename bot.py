@@ -52,42 +52,24 @@ TRADE_TYPES = {"spot":"📈 Спот","futures":"🔮 Фьючерсы","margin"
 
 # ── PRICE CACHE ───────────────────────────────────────────────────
 _price_cache     = {}
-_price_cache_ttl = 120     # 60 → 120 сек
+_price_cache_ttl = 60      # 30 → 60 сек: вдвое меньше запросов
 _balance_cache   = {}
 _balance_cache_ts  = 0
-_balance_cache_ttl = 180   # 120 → 180 сек
+_balance_cache_ttl = 120   # 60 → 120 сек: баланс реже
 
-# ── RATE LIMITER ──────────────────────────────────────────────────
-_rl_lock      = None
+# ── RATE LIMITER — не более 8 запросов в секунду ──────────────────
+_rl_lock      = None   # asyncio.Lock (создаётся в main())
 _rl_last_req  = 0.0
-_rl_min_gap   = 0.35   # 150мс → 350мс между запросами
-
-# ── WEIGHT TRACKER — не более 600 в минуту (лимит 1200) ──────────
-_weight_minute  = 0
-_weight_reset_t = 0.0
+_rl_min_gap   = 0.15   # минимум 150мс между запросами
 
 def _rate_limit():
-    """Пауза между запросами + контроль веса."""
-    global _rl_last_req, _weight_minute, _weight_reset_t
+    """Синхронная пауза между API запросами."""
+    global _rl_last_req
     now  = time.time()
-    # Сброс счётчика каждую минуту
-    if now - _weight_reset_t >= 60:
-        _weight_minute = 0
-        _weight_reset_t = now
-    # Если близко к лимиту — ждём следующей минуты
-    if _weight_minute >= 600:
-        sleep_time = 60 - (now - _weight_reset_t)
-        if sleep_time > 0:
-            log.warning(f"Weight limit близко ({_weight_minute}) — пауза {sleep_time:.1f}с")
-            time.sleep(sleep_time)
-        _weight_minute = 0
-        _weight_reset_t = time.time()
-    # Минимальная пауза между запросами
     diff = now - _rl_last_req
     if diff < _rl_min_gap:
         time.sleep(_rl_min_gap - diff)
     _rl_last_req = time.time()
-    _weight_minute += 2   # минимальный вес запроса
 
 # ── STATE ─────────────────────────────────────────────────────────
 def default_user():
@@ -137,7 +119,7 @@ SCALPER_STATE = {
         "volume_mult":       1.5,    # Volume spike multiplier
         "max_positions":     3,
         "daily_loss_limit":  50.0,   # Stop bot if daily loss > $X
-        "loop_sleep":        60,     # 45→60 сек
+        "loop_sleep":        45,     # 15→45 сек, меньше запросов
         "ema_fast":          9,
         "ema_slow":          21,
     }
@@ -244,12 +226,21 @@ async def save_state_job(ctx):
 
 # ── BINANCE CLIENT ────────────────────────────────────────────────
 bc = None
-if BINANCE_OK and BINANCE_API_KEY:
+if not BINANCE_OK:
+    log.warning("❌ python-binance не установлен — демо-режим")
+elif not BINANCE_API_KEY:
+    log.warning("❌ BINANCE_API_KEY не задан — демо-режим")
+elif not BINANCE_SECRET:
+    log.warning("❌ BINANCE_SECRET не задан — демо-режим")
+else:
     try:
         bc = Client(BINANCE_API_KEY, BINANCE_SECRET, testnet=USE_TESTNET)
-        log.info("✅ Binance " + ("TESTNET" if USE_TESTNET else "LIVE"))
+        # Проверка подключения
+        bc.ping()
+        log.info("✅ Binance " + ("TESTNET" if USE_TESTNET else "LIVE") + " — подключено")
     except Exception as e:
-        log.warning(f"Binance: {e}")
+        log.error(f"❌ Binance подключение не удалось: {e}")
+        bc = None
 
 MOCK = {"BTCUSDT":77500,"ETHUSDT":3450,"BNBUSDT":582,"SOLUSDT":176,
         "XRPUSDT":0.58,"ADAUSDT":0.48,"DOGEUSDT":0.162,"AVAXUSDT":38.7,
@@ -298,12 +289,18 @@ def get_price(coin):
     if bc:
         try:
             _rate_limit()
-            # get_symbol_ticker = weight 2 (get_ticker = weight 40, никогда не используем!)
-            t=bc.get_symbol_ticker(symbol=s)
+            t=bc.get_symbol_ticker(symbol=s)   # weight=2 (дешевле get_ticker)
             result={"symbol":s,"price":float(t["price"]),
                     "change":0.0,"high":0.0,"low":0.0,"volume":0.0}
-            _price_cache[s]=(result,now)
-            return result
+            # Дополнительные данные только если кэш совсем пуст
+            try:
+                stats=bc.get_ticker(symbol=s)
+                result.update({"change":float(stats["priceChangePercent"]),
+                                "high":float(stats["highPrice"]),
+                                "low":float(stats["lowPrice"]),
+                                "volume":float(stats["volume"])})
+            except: pass
+            _price_cache[s]=(result,now); return result
         except Exception as e:
             if "1003" in str(e) or "banned" in str(e).lower():
                 log.warning("Rate limited — using cache")
@@ -316,26 +313,24 @@ def get_price(coin):
     _price_cache[s]=(result,now); return result
 
 def get_all_prices():
-    """Все цены ОДНИМ запросом weight=4 (вместо get_ticker weight=80)."""
+    """Get all TOP_COINS prices in ONE request to save rate limits."""
     if bc:
         try:
-            _rate_limit()
-            # get_all_tickers() = weight 4 — самый дешёвый способ
-            tickers = bc.get_all_tickers()
-            top_syms = {sym(c) for c in TOP_COINS}
-            result = {}
-            now = time.time()
+            tickers=bc.get_ticker()
+            result={}
             for t in tickers:
-                s = t["symbol"]
-                if s in top_syms:
-                    v = {"symbol": s, "price": float(t["price"]),
-                         "change": 0.0, "high": 0.0, "low": 0.0, "volume": 0.0}
-                    result[s] = v
-                    _price_cache[s] = (v, now)
+                if t["symbol"] in [sym(c) for c in TOP_COINS]:
+                    s=t["symbol"]
+                    result[s]={"symbol":s,"price":float(t["lastPrice"]),
+                               "change":float(t["priceChangePercent"]),
+                               "high":float(t["highPrice"]),"low":float(t["lowPrice"]),
+                               "volume":float(t["volume"])}
+            now=time.time()
+            for s,v in result.items():
+                _price_cache[s]=(v,now)
             return result
-        except Exception as e:
-            log.warning(f"get_all_prices: {e}")
-    return {sym(c): get_price(c) for c in TOP_COINS}
+        except: pass
+    return {sym(c):get_price(c) for c in TOP_COINS}
 
 def get_klines(coin,interval="1h",limit=60):  # limit 120→60
     s=sym(coin)
@@ -1010,7 +1005,59 @@ async def do_auto_trade_direct(uid,chat_id,coin,side,amount,ta,ctx):
 # ══════════════════════════════════════════════════════════════════
 #  COMMANDS
 # ══════════════════════════════════════════════════════════════════
-async def cmd_start(u,c):
+async def cmd_debug(u, c):
+    """Показывает статус подключения и переменных окружения."""
+    uid = u.effective_user.id
+    USER_DATA[uid]["chat_id"] = u.effective_chat.id
+
+    has_key    = bool(BINANCE_API_KEY)
+    has_secret = bool(BINANCE_SECRET)
+    key_short  = (BINANCE_API_KEY[:6] + "..." + BINANCE_API_KEY[-4:]) if has_key else "НЕ ЗАДАН"
+    connected  = bc is not None
+
+    # Проверим реальный ping
+    ping_ok = False
+    ping_err = ""
+    if bc:
+        try:
+            bc.ping()
+            ping_ok = True
+        except Exception as e:
+            ping_err = str(e)[:80]
+
+    text = (
+        "🔧 *DEBUG — Статус подключения*\n\n"
+        f"📦 python-binance: {'✅' if BINANCE_OK else '❌ не установлен'}\n"
+        f"🔑 BINANCE_API_KEY: {'✅ ' + key_short if has_key else '❌ НЕ ЗАДАН'}\n"
+        f"🔐 BINANCE_SECRET:  {'✅ задан' if has_secret else '❌ НЕ ЗАДАН'}\n"
+        f"🌐 USE_TESTNET:     {'🟡 Testnet' if USE_TESTNET else '🟢 LIVE'}\n"
+        f"🤖 Binance Client:  {'✅ создан' if connected else '❌ None (демо-режим)'}\n"
+        f"📡 Ping Binance:    {'✅ OK' if ping_ok else '❌ ' + ping_err}\n\n"
+    )
+
+    if not has_key or not has_secret:
+        text += (
+            "⚠️ *Что делать:*\n"
+            "1. Зайди в Render → твой сервис\n"
+            "2. *Environment* вкладка\n"
+            "3. Добавь переменные:\n"
+            "`BINANCE_API_KEY` = твой ключ\n"
+            "`BINANCE_SECRET` = твой секрет\n"
+            "4. Сохрани → бот перезапустится"
+        )
+    elif not ping_ok:
+        text += (
+            "⚠️ *Ключи есть но ping не прошёл:*\n"
+            "— Проверь что ключи активны на Binance\n"
+            "— IP restriction отключи на Binance API\n"
+            "— Или ключи неверные — создай новые"
+        )
+    else:
+        text += "✅ *Всё подключено, бот работает в реальном режиме!*"
+
+    await u.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+
+
     uid=u.effective_user.id; name=u.effective_user.first_name or "Трейдер"
     USER_DATA[uid]["chat_id"]=u.effective_chat.id
     live="\n⚠️ _Демо-режим_" if not bc else ("\n🟡 _Testnet_" if USE_TESTNET else "\n🟢 _LIVE торговля_")
@@ -2401,16 +2448,17 @@ async def main():
         ("pnl",cmd_pnl),("orders",cmd_orders),("balance",cmd_balance),
         ("analysis",cmd_analysis),("alert",cmd_alert),("fg",cmd_fg),
         ("news",cmd_news),("convert",cmd_convert),("settings",cmd_settings),
-        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set)]:
+        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set),
+        ("debug",cmd_debug)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
-    app.job_queue.run_repeating(alerts_job,      interval=120,  first=30)   # 90→120
-    app.job_queue.run_repeating(auto_job,         interval=1200, first=240)  # 900→1200
-    app.job_queue.run_repeating(dca_job,          interval=900,  first=180)  # 600→900
-    app.job_queue.run_repeating(daily_report_job, interval=3600, first=300)
-    app.job_queue.run_repeating(change_alert_job, interval=900,  first=120)  # 600→900
-    app.job_queue.run_repeating(save_state_job,   interval=180,  first=90)   # 120→180
+    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
+    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
+    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
+    app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
+    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
+    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
     log.info("🚀 Bot v8.0 started!")
     async with app:
         await app.initialize(); await app.start()
