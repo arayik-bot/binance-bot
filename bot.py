@@ -52,24 +52,42 @@ TRADE_TYPES = {"spot":"📈 Спот","futures":"🔮 Фьючерсы","margin"
 
 # ── PRICE CACHE ───────────────────────────────────────────────────
 _price_cache     = {}
-_price_cache_ttl = 60      # 30 → 60 сек: вдвое меньше запросов
+_price_cache_ttl = 120     # 60 → 120 сек
 _balance_cache   = {}
 _balance_cache_ts  = 0
-_balance_cache_ttl = 120   # 60 → 120 сек: баланс реже
+_balance_cache_ttl = 180   # 120 → 180 сек
 
-# ── RATE LIMITER — не более 8 запросов в секунду ──────────────────
-_rl_lock      = None   # asyncio.Lock (создаётся в main())
+# ── RATE LIMITER ──────────────────────────────────────────────────
+_rl_lock      = None
 _rl_last_req  = 0.0
-_rl_min_gap   = 0.15   # минимум 150мс между запросами
+_rl_min_gap   = 0.35   # 150мс → 350мс между запросами
+
+# ── WEIGHT TRACKER — не более 600 в минуту (лимит 1200) ──────────
+_weight_minute  = 0
+_weight_reset_t = 0.0
 
 def _rate_limit():
-    """Синхронная пауза между API запросами."""
-    global _rl_last_req
+    """Пауза между запросами + контроль веса."""
+    global _rl_last_req, _weight_minute, _weight_reset_t
     now  = time.time()
+    # Сброс счётчика каждую минуту
+    if now - _weight_reset_t >= 60:
+        _weight_minute = 0
+        _weight_reset_t = now
+    # Если близко к лимиту — ждём следующей минуты
+    if _weight_minute >= 600:
+        sleep_time = 60 - (now - _weight_reset_t)
+        if sleep_time > 0:
+            log.warning(f"Weight limit близко ({_weight_minute}) — пауза {sleep_time:.1f}с")
+            time.sleep(sleep_time)
+        _weight_minute = 0
+        _weight_reset_t = time.time()
+    # Минимальная пауза между запросами
     diff = now - _rl_last_req
     if diff < _rl_min_gap:
         time.sleep(_rl_min_gap - diff)
     _rl_last_req = time.time()
+    _weight_minute += 2   # минимальный вес запроса
 
 # ── STATE ─────────────────────────────────────────────────────────
 def default_user():
@@ -119,7 +137,7 @@ SCALPER_STATE = {
         "volume_mult":       1.5,    # Volume spike multiplier
         "max_positions":     3,
         "daily_loss_limit":  50.0,   # Stop bot if daily loss > $X
-        "loop_sleep":        45,     # 15→45 сек, меньше запросов
+        "loop_sleep":        60,     # 45→60 сек
         "ema_fast":          9,
         "ema_slow":          21,
     }
@@ -280,18 +298,12 @@ def get_price(coin):
     if bc:
         try:
             _rate_limit()
-            t=bc.get_symbol_ticker(symbol=s)   # weight=2 (дешевле get_ticker)
+            # get_symbol_ticker = weight 2 (get_ticker = weight 40, никогда не используем!)
+            t=bc.get_symbol_ticker(symbol=s)
             result={"symbol":s,"price":float(t["price"]),
                     "change":0.0,"high":0.0,"low":0.0,"volume":0.0}
-            # Дополнительные данные только если кэш совсем пуст
-            try:
-                stats=bc.get_ticker(symbol=s)
-                result.update({"change":float(stats["priceChangePercent"]),
-                                "high":float(stats["highPrice"]),
-                                "low":float(stats["lowPrice"]),
-                                "volume":float(stats["volume"])})
-            except: pass
-            _price_cache[s]=(result,now); return result
+            _price_cache[s]=(result,now)
+            return result
         except Exception as e:
             if "1003" in str(e) or "banned" in str(e).lower():
                 log.warning("Rate limited — using cache")
@@ -304,24 +316,26 @@ def get_price(coin):
     _price_cache[s]=(result,now); return result
 
 def get_all_prices():
-    """Get all TOP_COINS prices in ONE request to save rate limits."""
+    """Все цены ОДНИМ запросом weight=4 (вместо get_ticker weight=80)."""
     if bc:
         try:
-            tickers=bc.get_ticker()
-            result={}
+            _rate_limit()
+            # get_all_tickers() = weight 4 — самый дешёвый способ
+            tickers = bc.get_all_tickers()
+            top_syms = {sym(c) for c in TOP_COINS}
+            result = {}
+            now = time.time()
             for t in tickers:
-                if t["symbol"] in [sym(c) for c in TOP_COINS]:
-                    s=t["symbol"]
-                    result[s]={"symbol":s,"price":float(t["lastPrice"]),
-                               "change":float(t["priceChangePercent"]),
-                               "high":float(t["highPrice"]),"low":float(t["lowPrice"]),
-                               "volume":float(t["volume"])}
-            now=time.time()
-            for s,v in result.items():
-                _price_cache[s]=(v,now)
+                s = t["symbol"]
+                if s in top_syms:
+                    v = {"symbol": s, "price": float(t["price"]),
+                         "change": 0.0, "high": 0.0, "low": 0.0, "volume": 0.0}
+                    result[s] = v
+                    _price_cache[s] = (v, now)
             return result
-        except: pass
-    return {sym(c):get_price(c) for c in TOP_COINS}
+        except Exception as e:
+            log.warning(f"get_all_prices: {e}")
+    return {sym(c): get_price(c) for c in TOP_COINS}
 
 def get_klines(coin,interval="1h",limit=60):  # limit 120→60
     s=sym(coin)
@@ -2391,12 +2405,12 @@ async def main():
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
-    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
-    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
-    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
-    app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
-    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
-    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
+    app.job_queue.run_repeating(alerts_job,      interval=120,  first=30)   # 90→120
+    app.job_queue.run_repeating(auto_job,         interval=1200, first=240)  # 900→1200
+    app.job_queue.run_repeating(dca_job,          interval=900,  first=180)  # 600→900
+    app.job_queue.run_repeating(daily_report_job, interval=3600, first=300)
+    app.job_queue.run_repeating(change_alert_job, interval=900,  first=120)  # 600→900
+    app.job_queue.run_repeating(save_state_job,   interval=180,  first=90)   # 120→180
     log.info("🚀 Bot v8.0 started!")
     async with app:
         await app.initialize(); await app.start()
