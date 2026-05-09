@@ -226,21 +226,12 @@ async def save_state_job(ctx):
 
 # ── BINANCE CLIENT ────────────────────────────────────────────────
 bc = None
-if not BINANCE_OK:
-    log.warning("❌ python-binance не установлен — демо-режим")
-elif not BINANCE_API_KEY:
-    log.warning("❌ BINANCE_API_KEY не задан — демо-режим")
-elif not BINANCE_SECRET:
-    log.warning("❌ BINANCE_SECRET не задан — демо-режим")
-else:
+if BINANCE_OK and BINANCE_API_KEY:
     try:
         bc = Client(BINANCE_API_KEY, BINANCE_SECRET, testnet=USE_TESTNET)
-        # Проверка подключения
-        bc.ping()
-        log.info("✅ Binance " + ("TESTNET" if USE_TESTNET else "LIVE") + " — подключено")
+        log.info("✅ Binance " + ("TESTNET" if USE_TESTNET else "LIVE"))
     except Exception as e:
-        log.error(f"❌ Binance подключение не удалось: {e}")
-        bc = None
+        log.warning(f"Binance: {e}")
 
 MOCK = {"BTCUSDT":77500,"ETHUSDT":3450,"BNBUSDT":582,"SOLUSDT":176,
         "XRPUSDT":0.58,"ADAUSDT":0.48,"DOGEUSDT":0.162,"AVAXUSDT":38.7,
@@ -704,8 +695,7 @@ def main_kb():
         [InlineKeyboardButton("⚙️ Риск/Настройки", callback_data="m_settings"),
          InlineKeyboardButton("💳 Баланс",         callback_data="m_balance")],
         [InlineKeyboardButton("⚡ Скальпер",        callback_data="m_scalper")],
-        [InlineKeyboardButton("🔄 Мои Trailing-и",   callback_data="m_trailing")],
-        [InlineKeyboardButton("ℹ️ Помощь",           callback_data="m_help")],
+        [InlineKeyboardButton("ℹ️ Помощь",          callback_data="m_help")],
     ])
 
 def back(t="m_main"):
@@ -730,61 +720,7 @@ def sizes_kb(act,coin,back_cb):
     rows.append([InlineKeyboardButton("🔙 Назад",callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
 
-def trailing_status_text(uid):
-    ts = USER_DATA[uid].get("trailing_stops", {})
-    active = {s: t for s, t in ts.items() if t.get("active")}
-
-    if not active:
-        return (
-            "🔄 *Мои Trailing Stop-ы*\n\n"
-            "📭 Нет активных Trailing Stop-ов\n\n"
-            "Установить: `/trail BTC 3`"
-        )
-
-    lines = ["🔄 *Мои Trailing Stop-ы*\n"]
-    for symbol, t in active.items():
-        cur = get_price(symbol)
-        cur_price = cur.get("price", 0) if "error" not in cur else 0
-        high      = t.get("high_price", 0)
-        pct       = t.get("trail_pct", 0)
-        trigger   = high * (1 - pct / 100)
-
-        if cur_price and high:
-            dist_pct  = (cur_price - trigger) / cur_price * 100
-            safe_emoji = "🟢" if dist_pct > pct else "🟡" if dist_pct > pct / 2 else "🔴"
-        else:
-            dist_pct  = 0
-            safe_emoji = "⚪"
-
-        coin = symbol.replace("USDT", "")
-        lines.append(
-            f"{safe_emoji} *{coin}* — Trail: `{pct}%`\n"
-            f"   📈 Пик:      `${high:,.4f}`\n"
-            f"   💵 Тек.:     `${cur_price:,.4f}`\n"
-            f"   🎯 Триггер:  `${trigger:,.4f}`\n"
-            f"   📏 До стоп.: `{dist_pct:.2f}%`\n"
-        )
-
-    lines.append("━━━━━━━━━━━━━━━━")
-    lines.append(f"Всего активных: *{len(active)}*")
-    lines.append("\n🟢 Далеко от стопа  🟡 Близко  🔴 Очень близко")
-    return "\n".join(lines)
-
-def trailing_kb(uid):
-    ts     = USER_DATA[uid].get("trailing_stops", {})
-    active = [s for s, t in ts.items() if t.get("active")]
-    rows   = [[InlineKeyboardButton("🔄 Обновить", callback_data="m_trailing")]]
-    if active:
-        rows.append([InlineKeyboardButton("❌ Снять все", callback_data="trail_clear_all")])
-        for symbol in active:
-            coin = symbol.replace("USDT", "")
-            rows.append([InlineKeyboardButton(
-                f"🗑 Снять {coin}", callback_data=f"trail_remove__{symbol}"
-            )])
-    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="m_main")])
-    return InlineKeyboardMarkup(rows)
-
-
+def auto_kb(uid):
     on=USER_DATA[uid]["auto_enabled"]
     tt=TRADE_TYPES.get(USER_DATA[uid]["auto_type"],"")
     sz=USER_DATA[uid]["auto_size"]; nc=len(USER_DATA[uid]["auto_coins"])
@@ -1005,59 +941,7 @@ async def do_auto_trade_direct(uid,chat_id,coin,side,amount,ta,ctx):
 # ══════════════════════════════════════════════════════════════════
 #  COMMANDS
 # ══════════════════════════════════════════════════════════════════
-async def cmd_debug(u, c):
-    """Показывает статус подключения и переменных окружения."""
-    uid = u.effective_user.id
-    USER_DATA[uid]["chat_id"] = u.effective_chat.id
-
-    has_key    = bool(BINANCE_API_KEY)
-    has_secret = bool(BINANCE_SECRET)
-    key_short  = (BINANCE_API_KEY[:6] + "..." + BINANCE_API_KEY[-4:]) if has_key else "НЕ ЗАДАН"
-    connected  = bc is not None
-
-    # Проверим реальный ping
-    ping_ok = False
-    ping_err = ""
-    if bc:
-        try:
-            bc.ping()
-            ping_ok = True
-        except Exception as e:
-            ping_err = str(e)[:80]
-
-    text = (
-        "🔧 *DEBUG — Статус подключения*\n\n"
-        f"📦 python-binance: {'✅' if BINANCE_OK else '❌ не установлен'}\n"
-        f"🔑 BINANCE_API_KEY: {'✅ ' + key_short if has_key else '❌ НЕ ЗАДАН'}\n"
-        f"🔐 BINANCE_SECRET:  {'✅ задан' if has_secret else '❌ НЕ ЗАДАН'}\n"
-        f"🌐 USE_TESTNET:     {'🟡 Testnet' if USE_TESTNET else '🟢 LIVE'}\n"
-        f"🤖 Binance Client:  {'✅ создан' if connected else '❌ None (демо-режим)'}\n"
-        f"📡 Ping Binance:    {'✅ OK' if ping_ok else '❌ ' + ping_err}\n\n"
-    )
-
-    if not has_key or not has_secret:
-        text += (
-            "⚠️ *Что делать:*\n"
-            "1. Зайди в Render → твой сервис\n"
-            "2. *Environment* вкладка\n"
-            "3. Добавь переменные:\n"
-            "`BINANCE_API_KEY` = твой ключ\n"
-            "`BINANCE_SECRET` = твой секрет\n"
-            "4. Сохрани → бот перезапустится"
-        )
-    elif not ping_ok:
-        text += (
-            "⚠️ *Ключи есть но ping не прошёл:*\n"
-            "— Проверь что ключи активны на Binance\n"
-            "— IP restriction отключи на Binance API\n"
-            "— Или ключи неверные — создай новые"
-        )
-    else:
-        text += "✅ *Всё подключено, бот работает в реальном режиме!*"
-
-    await u.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-
-
+async def cmd_start(u,c):
     uid=u.effective_user.id; name=u.effective_user.first_name or "Трейдер"
     USER_DATA[uid]["chat_id"]=u.effective_chat.id
     live="\n⚠️ _Демо-режим_" if not bc else ("\n🟡 _Testnet_" if USE_TESTNET else "\n🟢 _LIVE торговля_")
@@ -1859,32 +1743,6 @@ async def cb(u,c):
         USER_DATA[uid]["alerts"]=[]
         await q.edit_message_text("🗑 Удалены.",reply_markup=back("m_main"))
 
-    # ── МОИ TRAILING-И ───────────────────────────────────────────
-    elif d=="m_trailing":
-        await q.edit_message_text(
-            trailing_status_text(uid),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=trailing_kb(uid)
-        )
-    elif d=="trail_clear_all":
-        for s in USER_DATA[uid].get("trailing_stops", {}):
-            USER_DATA[uid]["trailing_stops"][s]["active"] = False
-        save_state()
-        await q.edit_message_text(
-            "✅ Все Trailing Stop-ы сняты",
-            reply_markup=back("m_main")
-        )
-    elif d.startswith("trail_remove__"):
-        symbol = d.replace("trail_remove__", "")
-        if symbol in USER_DATA[uid].get("trailing_stops", {}):
-            USER_DATA[uid]["trailing_stops"][symbol]["active"] = False
-            save_state()
-        await q.edit_message_text(
-            trailing_status_text(uid),
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=trailing_kb(uid)
-        )
-
     # ── SCALPER ───────────────────────────────────────────────────
     elif d=="m_scalper":
         await q.edit_message_text(scalper_status_text(),parse_mode=ParseMode.MARKDOWN,reply_markup=scalper_kb())
@@ -2448,8 +2306,7 @@ async def main():
         ("pnl",cmd_pnl),("orders",cmd_orders),("balance",cmd_balance),
         ("analysis",cmd_analysis),("alert",cmd_alert),("fg",cmd_fg),
         ("news",cmd_news),("convert",cmd_convert),("settings",cmd_settings),
-        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set),
-        ("debug",cmd_debug)]:
+        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
