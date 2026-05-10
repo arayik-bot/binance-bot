@@ -370,21 +370,44 @@ def get_real_balance():
             return {"_error":str(e)}
     return {"USDT":1000.0,"BTC":0.01,"ETH":0.5,"_mock":True}
 
+_trades_cache = []
+_trades_cache_ts = 0
+_trades_cache_ttl = 300  # 5 минут
+
 def get_real_trades():
+    global _trades_cache, _trades_cache_ts
+    now = time.time()
+    if _trades_cache and now - _trades_cache_ts < _trades_cache_ttl:
+        return _trades_cache
     if not bc: return []
-    all_trades=[]
-    for coin in TOP_COINS:
-        s=sym(coin)
+    all_trades = []
+    # Берём только монеты с балансом — меньше запросов
+    try:
+        bals = get_real_balance()
+        bals.pop("_error", None); bals.pop("_mock", None); bals.pop("USDT", None)
+        active_coins = [a for a, q in bals.items() if q > 0.000001 and a in TOP_COINS]
+        # Добавляем TOP_COINS частично для истории
+        scan_coins = list(set(active_coins + TOP_COINS[:5]))
+    except:
+        scan_coins = TOP_COINS[:5]
+
+    for coin in scan_coins:
+        s = sym(coin)
         try:
-            trades=bc.get_my_trades(symbol=s,limit=5)
+            _rate_limit()
+            trades = bc.get_my_trades(symbol=s, limit=10)
             for t in trades:
                 all_trades.append({
-                    "time":datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
-                    "symbol":s,"side":"BUY" if t["isBuyer"] else "SELL",
-                    "qty":float(t["qty"]),"price":float(t["price"]),
-                    "total":float(t["qty"])*float(t["price"]),"ts":t["time"]})
+                    "time": datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
+                    "symbol": s, "side": "BUY" if t["isBuyer"] else "SELL",
+                    "qty": float(t["qty"]), "price": float(t["price"]),
+                    "total": float(t["qty"]) * float(t["price"]), "ts": t["time"]
+                })
         except: continue
-    all_trades.sort(key=lambda x:x["ts"],reverse=True)
+
+    all_trades.sort(key=lambda x: x["ts"], reverse=True)
+    _trades_cache = all_trades
+    _trades_cache_ts = now
     return all_trades
 
 def place_order(coin,side,usdt_amount,trade_type="spot"):
@@ -1408,8 +1431,11 @@ async def cb(u,c):
         if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); total+=usdt
         for asset,qty in sorted(bals.items(),key=lambda x:-x[1])[:12]:
             t=get_price(asset)
-            if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"• *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
-            else: lines.append(f"• *{asset}*: `{qty:.6f}`")
+            if "error" not in t:
+                v=qty*t["price"]; total+=v
+                lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
+            else:
+                lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}`")
         lines.append(f"\n💎 *Итого:* `${total:.2f}`")
         await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_orders":
@@ -1440,9 +1466,9 @@ async def cb(u,c):
         res=[(s.replace("USDT",""),v["change"],v["price"]) for s,v in prices.items() if "error" not in v]
         res.sort(key=lambda x:x[1],reverse=True)
         lines=["📋 *СКРИНЕР*\n","🟢 *Рост:*"]
-        for coin,chg,pr in res[:5]: lines.append(f"  • *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
+        for coin,chg,pr in res[:5]: lines.append(f"  {ce(coin)} *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
         lines.append("\n🔴 *Падение:*")
-        for coin,chg,pr in res[-5:]: lines.append(f"  • *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
+        for coin,chg,pr in res[-5:]: lines.append(f"  {ce(coin)} *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
         await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_news":
         news=get_news(6); lines=["📰 *Крипто-новости*\n"]
