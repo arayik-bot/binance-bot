@@ -695,7 +695,8 @@ def main_kb():
         [InlineKeyboardButton("⚙️ Риск/Настройки", callback_data="m_settings"),
          InlineKeyboardButton("💳 Баланс",         callback_data="m_balance")],
         [InlineKeyboardButton("⚡ Скальпер",        callback_data="m_scalper")],
-        [InlineKeyboardButton("ℹ️ Помощь",          callback_data="m_help")],
+        [InlineKeyboardButton("🔄 Мои Trailing-и",   callback_data="m_trailing")],
+        [InlineKeyboardButton("ℹ️ Помощь",           callback_data="m_help")],
     ])
 
 def back(t="m_main"):
@@ -718,6 +719,46 @@ def sizes_kb(act,coin,back_cb):
     if row: rows.append(row)
     rows.append([InlineKeyboardButton("✏️ Своя сумма",callback_data=f"custom__{act}__{coin}")])
     rows.append([InlineKeyboardButton("🔙 Назад",callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def trailing_status_text(uid):
+    ts = USER_DATA[uid].get("trailing_stops", {})
+    active = {s: t for s, t in ts.items() if t.get("active")}
+    if not active:
+        return "🔄 *Мои Trailing Stop-ы*\n\n📭 Нет активных\n\nУстановить: `/trail BTC 3`"
+    lines = ["🔄 *Мои Trailing Stop-ы*\n"]
+    for symbol, t in active.items():
+        cur = get_price(symbol)
+        cur_price = cur.get("price", 0) if "error" not in cur else 0
+        high = t.get("high_price", 0)
+        pct  = t.get("trail_pct", 0)
+        trigger = high * (1 - pct / 100)
+        if cur_price and high:
+            dist = (cur_price - trigger) / cur_price * 100
+            em = "🟢" if dist > pct else "🟡" if dist > pct/2 else "🔴"
+        else:
+            dist = 0; em = "⚪"
+        coin = symbol.replace("USDT","")
+        lines.append(
+            f"{em} *{coin}* — `{pct}%`\n"
+            f"   📈 Пик: `${high:,.4f}`\n"
+            f"   💵 Тек.: `${cur_price:,.4f}`\n"
+            f"   🎯 Триггер: `${trigger:,.4f}`\n"
+            f"   📏 До стопа: `{dist:.2f}%`\n"
+        )
+    lines.append(f"━━━━━━━━━━━━\nВсего: *{len(active)}*  🟢далеко  🟡близко  🔴критично")
+    return "\n".join(lines)
+
+def trailing_kb(uid):
+    ts = USER_DATA[uid].get("trailing_stops", {})
+    active = [s for s, t in ts.items() if t.get("active")]
+    rows = [[InlineKeyboardButton("🔄 Обновить", callback_data="m_trailing")]]
+    if active:
+        rows.append([InlineKeyboardButton("❌ Снять все", callback_data="trail_clear_all")])
+        for s in active:
+            coin = s.replace("USDT","")
+            rows.append([InlineKeyboardButton(f"🗑 Снять {coin}", callback_data=f"trail_remove__{s}")])
+    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="m_main")])
     return InlineKeyboardMarkup(rows)
 
 def auto_kb(uid):
@@ -1742,6 +1783,22 @@ async def cb(u,c):
     elif d=="alert_clear":
         USER_DATA[uid]["alerts"]=[]
         await q.edit_message_text("🗑 Удалены.",reply_markup=back("m_main"))
+
+    elif d=="m_trailing":
+        await q.edit_message_text(trailing_status_text(uid),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=trailing_kb(uid))
+    elif d=="trail_clear_all":
+        for s in USER_DATA[uid].get("trailing_stops",{}):
+            USER_DATA[uid]["trailing_stops"][s]["active"]=False
+        save_state()
+        await q.edit_message_text("✅ Все Trailing Stop-ы сняты",reply_markup=back("m_main"))
+    elif d.startswith("trail_remove__"):
+        symbol=d.replace("trail_remove__","")
+        if symbol in USER_DATA[uid].get("trailing_stops",{}):
+            USER_DATA[uid]["trailing_stops"][symbol]["active"]=False
+            save_state()
+        await q.edit_message_text(trailing_status_text(uid),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=trailing_kb(uid))
 
     # ── SCALPER ───────────────────────────────────────────────────
     elif d=="m_scalper":
