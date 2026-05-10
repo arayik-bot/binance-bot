@@ -50,6 +50,20 @@ TOP_COINS   = ["BTC","ETH","BNB","SOL","XRP","ADA","DOGE","AVAX",
                "DOT","MATIC","LINK","LTC","UNI","ATOM","NEAR"]
 TRADE_TYPES = {"spot":"📈 Спот","futures":"🔮 Фьючерсы","margin":"💳 Маржа"}
 
+COIN_EMOJI = {
+    "BTC":   "₿",   "ETH":   "Ξ",   "BNB":   "🔶",
+    "SOL":   "◎",   "XRP":   "💧",  "ADA":   "🔵",
+    "DOGE":  "🐶",  "AVAX":  "🔺",  "DOT":   "⚪",
+    "MATIC": "🟣",  "LINK":  "🔗",  "LTC":   "🌕",
+    "UNI":   "🦄",  "ATOM":  "⚛️",  "NEAR":  "🟩",
+    "USDT":  "💵",  "BUSD":  "💛",  "USDC":  "🔵",
+}
+
+def ce(coin: str) -> str:
+    """Возвращает иконку монеты."""
+    c = coin.upper().replace("USDT","").replace("BTC","").replace("ETH","")
+    return COIN_EMOJI.get(coin.upper().replace("USDT",""), COIN_EMOJI.get(c, "🪙"))
+
 # ── PRICE CACHE ───────────────────────────────────────────────────
 _price_cache     = {}
 _price_cache_ttl = 60      # 30 → 60 сек: вдвое меньше запросов
@@ -555,11 +569,11 @@ def portfolio_text(uid):
             avg=local["avg_price"]; inv=qty*avg; pnl=val-inv
             pct=pnl/inv*100 if inv else 0; ti+=inv
             e="🟢" if pnl>=0 else "🔴"
-            lines.append(f"{e} *{asset}*: `{qty:.6f}`\n"
+            lines.append(f"{e} {ce(asset)} *{asset}*: `{qty:.6f}`\n"
                          f"   Цена `${p:.4f}` | `${val:.2f}`\n"
                          f"   PnL `{'+' if pnl>=0 else ''}{pnl:.2f}$` ({pct:+.1f}%)\n")
         else:
-            lines.append(f"💠 *{asset}*: `{qty:.6f}` | `${val:.2f}`\n")
+            lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}` | `${val:.2f}`\n")
     if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); tc+=usdt
     if not has and usdt==0: return "📂 *Портфель пуст*\n\nПополните счёт."
     lines.append("─────────────────")
@@ -604,7 +618,8 @@ def pnl_stats_text(uid):
     for s,v in sorted(by_coin.items(),key=lambda x:-(x[1]["buy"]+x[1]["sell"]))[:8]:
         diff=v["sell"]-v["buy"]
         e="🟢" if diff>0 else "🔴" if diff<0 else "⚪"
-        lines.append(f"  {e} *{s}*: `{'+' if diff>=0 else ''}{diff:.2f}$`")
+        coin=s.replace("USDT","")
+        lines.append(f"  {e} {ce(coin)} *{s}*: `{'+' if diff>=0 else ''}{diff:.2f}$`")
     return "\n".join(lines)
 
 def update_portfolio(uid,order):
@@ -1214,8 +1229,8 @@ async def cmd_balance(u,c):
     if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); total+=usdt
     for asset,qty in sorted(bals.items(),key=lambda x:-x[1]):
         t=get_price(asset)
-        if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"  • *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
-        else: lines.append(f"  • *{asset}*: `{qty:.6f}`")
+        if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"  {ce(asset)} *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
+        else: lines.append(f"  {ce(asset)} *{asset}*: `{qty:.6f}`")
     lines.append(f"\n💎 *Итого ≈* `${total:.2f}`")
     lines.append(f"\n{'✅ Можно торговать' if usdt>=5 else '⚠️ Пополните USDT (мин $5)'}")
     await u.message.reply_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
@@ -1404,12 +1419,12 @@ async def cb(u,c):
             lines=[f"📖 *Сделки* ({len(trades)})\n"]
             for o in trades[:10]:
                 e="🟢" if o["side"]=="BUY" else "🔴"
-                lines.append(f"{e} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_")
+                lines.append(f"{e} {ce(o['symbol'].replace('USDT',''))} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_")
             await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
         else:
             local=USER_DATA[uid]["orders"]
             txt=("📖 *Сделки (бот)*\n\n"+"\n".join(
-                f"{'🟢' if o['side']=='BUY' else '🔴'} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_"
+                f"{'🟢' if o['side']=='BUY' else '🔴'} {ce(o['symbol'].replace('USDT',''))} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_"
                 for o in local[:8])) if local else "📭 *Нет сделок*"
             await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_prices":
