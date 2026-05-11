@@ -1600,7 +1600,7 @@ async def cb(u,c):
             lines=["🔄 *DCA Боты*\n"]
             for b in bots:
                 nxt=datetime.fromtimestamp(b["next_run"]).strftime("%d.%m %H:%M")
-                lines.append(f"• *{b['symbol']}* `${b['amount']}` / `{b['interval_h']}ч` → `{nxt}`")
+                lines.append(f"{ce(b['symbol'].replace('USDT',''))} *{b['symbol']}* `${b['amount']}` / `{b['interval_h']}ч` → `{nxt}`")
             txt="\n".join(lines)
         await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
@@ -1621,7 +1621,7 @@ async def cb(u,c):
         else:
             lines=["🎯 *Grid Боты*\n"]
             for b in bots:
-                lines.append(f"• *{b['symbol']}* `${b['low']:,.0f}`-`${b['high']:,.0f}` | Сделок: `{b['trades']}`")
+                lines.append(f"{ce(b['symbol'].replace('USDT',''))} *{b['symbol']}* `${b['low']:,.0f}`-`${b['high']:,.0f}` | Сделок: `{b['trades']}`")
             txt="\n".join(lines)
         await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
@@ -2334,17 +2334,19 @@ async def daily_report_job(ctx):
             for asset,qty in bals.items():
                 if asset=="USDT": continue
                 t=get_price(asset)
-                if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"• *{asset}*: `${v:.2f}`")
+                if "error" not in t:
+                    v=qty*t["price"]; total+=v
+                    lines.append(f"{ce(asset)} *{asset}*: `${v:.2f}`")
             lines.append(f"\n💎 *Итого:* `${total:.2f}`")
             fg=fear_greed()
             lines.append(f"{fg['emoji']} Страх/Жадность: `{fg['value']}` — {fg['label']}")
-            # Best/worst coins
             prices=get_all_prices()
             sorted_p=sorted(prices.items(),key=lambda x:x[1].get("change",0),reverse=True)
             if sorted_p:
                 best=sorted_p[0]; worst=sorted_p[-1]
-                lines.append(f"\n🟢 Лучший: *{best[0].replace('USDT','')}* `{best[1].get('change',0):+.2f}%`")
-                lines.append(f"🔴 Худший: *{worst[0].replace('USDT','')}* `{worst[1].get('change',0):+.2f}%`")
+                bc_name=best[0].replace("USDT",""); wc_name=worst[0].replace("USDT","")
+                lines.append(f"\n🟢 Лучший: {ce(bc_name)} *{bc_name}* `{best[1].get('change',0):+.2f}%`")
+                lines.append(f"🔴 Худший: {ce(wc_name)} *{wc_name}* `{worst[1].get('change',0):+.2f}%`")
             await ctx.bot.send_message(chat_id,"\n".join(lines),
                                         parse_mode=ParseMode.MARKDOWN,reply_markup=back())
         except Exception as e: log.error(f"Daily report: {e}")
