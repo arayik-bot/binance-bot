@@ -50,6 +50,20 @@ TOP_COINS   = ["BTC","ETH","BNB","SOL","XRP","ADA","DOGE","AVAX",
                "DOT","MATIC","LINK","LTC","UNI","ATOM","NEAR"]
 TRADE_TYPES = {"spot":"📈 Спот","futures":"🔮 Фьючерсы","margin":"💳 Маржа"}
 
+COIN_EMOJI = {
+    "BTC":   "₿",   "ETH":   "Ξ",   "BNB":   "🔶",
+    "SOL":   "◎",   "XRP":   "💧",  "ADA":   "🔵",
+    "DOGE":  "🐶",  "AVAX":  "🔺",  "DOT":   "⚪",
+    "MATIC": "🟣",  "LINK":  "🔗",  "LTC":   "🌕",
+    "UNI":   "🦄",  "ATOM":  "⚛️",  "NEAR":  "🟩",
+    "USDT":  "💵",  "BUSD":  "💛",  "USDC":  "🔵",
+}
+
+def ce(coin: str) -> str:
+    """Возвращает иконку монеты."""
+    c = coin.upper().replace("USDT","").replace("BTC","").replace("ETH","")
+    return COIN_EMOJI.get(coin.upper().replace("USDT",""), COIN_EMOJI.get(c, "🪙"))
+
 # ── PRICE CACHE ───────────────────────────────────────────────────
 _price_cache     = {}
 _price_cache_ttl = 60      # 30 → 60 сек: вдвое меньше запросов
@@ -159,7 +173,8 @@ def save_state():
                 "daily_pnl":    SCALPER_STATE["daily_pnl"],
                 "total_trades": SCALPER_STATE["total_trades"],
                 "chat_id":      SCALPER_STATE["chat_id"],
-            }
+            },
+            "trades_cache": _trades_cache[:50],
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2, default=str)
@@ -205,6 +220,14 @@ def load_state():
         SCALPER_STATE["daily_pnl"]    = sc.get("daily_pnl", 0.0)
         SCALPER_STATE["total_trades"] = sc.get("total_trades", 0)
         SCALPER_STATE["chat_id"]      = sc.get("chat_id")
+
+        # Восстановление кэша сделок
+        saved_trades = state.get("trades_cache", [])
+        if saved_trades:
+            global _trades_cache, _trades_cache_ts
+            _trades_cache    = saved_trades
+            _trades_cache_ts = time.time() - 60  # обновить при первом запросе
+            log.info(f"📊 Загружено сделок из кэша: {len(saved_trades)}")
 
         # Подсчёт восстановленного
         users_cnt    = len(state.get("users", {}))
@@ -356,21 +379,44 @@ def get_real_balance():
             return {"_error":str(e)}
     return {"USDT":1000.0,"BTC":0.01,"ETH":0.5,"_mock":True}
 
+_trades_cache = []
+_trades_cache_ts = 0
+_trades_cache_ttl = 300  # 5 минут
+
 def get_real_trades():
+    global _trades_cache, _trades_cache_ts
+    now = time.time()
+    if _trades_cache and now - _trades_cache_ts < _trades_cache_ttl:
+        return _trades_cache
     if not bc: return []
-    all_trades=[]
-    for coin in TOP_COINS:
-        s=sym(coin)
+    all_trades = []
+    # Берём только монеты с балансом — меньше запросов
+    try:
+        bals = get_real_balance()
+        bals.pop("_error", None); bals.pop("_mock", None); bals.pop("USDT", None)
+        active_coins = [a for a, q in bals.items() if q > 0.000001 and a in TOP_COINS]
+        # Добавляем TOP_COINS частично для истории
+        scan_coins = list(set(active_coins + TOP_COINS[:5]))
+    except:
+        scan_coins = TOP_COINS[:5]
+
+    for coin in scan_coins:
+        s = sym(coin)
         try:
-            trades=bc.get_my_trades(symbol=s,limit=5)
+            _rate_limit()
+            trades = bc.get_my_trades(symbol=s, limit=10)
             for t in trades:
                 all_trades.append({
-                    "time":datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
-                    "symbol":s,"side":"BUY" if t["isBuyer"] else "SELL",
-                    "qty":float(t["qty"]),"price":float(t["price"]),
-                    "total":float(t["qty"])*float(t["price"]),"ts":t["time"]})
+                    "time": datetime.fromtimestamp(t["time"]/1000).strftime("%d.%m %H:%M"),
+                    "symbol": s, "side": "BUY" if t["isBuyer"] else "SELL",
+                    "qty": float(t["qty"]), "price": float(t["price"]),
+                    "total": float(t["qty"]) * float(t["price"]), "ts": t["time"]
+                })
         except: continue
-    all_trades.sort(key=lambda x:x["ts"],reverse=True)
+
+    all_trades.sort(key=lambda x: x["ts"], reverse=True)
+    _trades_cache = all_trades
+    _trades_cache_ts = now
     return all_trades
 
 def place_order(coin,side,usdt_amount,trade_type="spot"):
@@ -555,11 +601,11 @@ def portfolio_text(uid):
             avg=local["avg_price"]; inv=qty*avg; pnl=val-inv
             pct=pnl/inv*100 if inv else 0; ti+=inv
             e="🟢" if pnl>=0 else "🔴"
-            lines.append(f"{e} *{asset}*: `{qty:.6f}`\n"
+            lines.append(f"{e} {ce(asset)} *{asset}*: `{qty:.6f}`\n"
                          f"   Цена `${p:.4f}` | `${val:.2f}`\n"
                          f"   PnL `{'+' if pnl>=0 else ''}{pnl:.2f}$` ({pct:+.1f}%)\n")
         else:
-            lines.append(f"💠 *{asset}*: `{qty:.6f}` | `${val:.2f}`\n")
+            lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}` | `${val:.2f}`\n")
     if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); tc+=usdt
     if not has and usdt==0: return "📂 *Портфель пуст*\n\nПополните счёт."
     lines.append("─────────────────")
@@ -604,7 +650,8 @@ def pnl_stats_text(uid):
     for s,v in sorted(by_coin.items(),key=lambda x:-(x[1]["buy"]+x[1]["sell"]))[:8]:
         diff=v["sell"]-v["buy"]
         e="🟢" if diff>0 else "🔴" if diff<0 else "⚪"
-        lines.append(f"  {e} *{s}*: `{'+' if diff>=0 else ''}{diff:.2f}$`")
+        coin=s.replace("USDT","")
+        lines.append(f"  {e} {ce(coin)} *{s}*: `{'+' if diff>=0 else ''}{diff:.2f}$`")
     return "\n".join(lines)
 
 def update_portfolio(uid,order):
@@ -683,7 +730,7 @@ def main_kb():
         [InlineKeyboardButton("💼 Портфель",       callback_data="m_portfolio"),
          InlineKeyboardButton("📈 PnL Стат.",      callback_data="m_pnl")],
         [InlineKeyboardButton("📊 Анализ",         callback_data="m_analysis"),
-         InlineKeyboardButton("📉 График",         web_app=WebAppInfo(url=CHART_URL))],
+         InlineKeyboardButton("📉 График",         callback_data="m_chart")],
         [InlineKeyboardButton("💹 Цены",           callback_data="m_prices"),
          InlineKeyboardButton("📋 Скринер",        callback_data="m_screener")],
         [InlineKeyboardButton("🔔 Алерты",         callback_data="m_alerts"),
@@ -695,7 +742,8 @@ def main_kb():
         [InlineKeyboardButton("⚙️ Риск/Настройки", callback_data="m_settings"),
          InlineKeyboardButton("💳 Баланс",         callback_data="m_balance")],
         [InlineKeyboardButton("⚡ Скальпер",        callback_data="m_scalper")],
-        [InlineKeyboardButton("ℹ️ Помощь",          callback_data="m_help")],
+        [InlineKeyboardButton("🔄 Мои Trailing-и",   callback_data="m_trailing")],
+        [InlineKeyboardButton("ℹ️ Помощь",           callback_data="m_help")],
     ])
 
 def back(t="m_main"):
@@ -720,7 +768,147 @@ def sizes_kb(act,coin,back_cb):
     rows.append([InlineKeyboardButton("🔙 Назад",callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
 
-def auto_kb(uid):
+def trailing_status_text(uid):
+    ts = USER_DATA[uid].get("trailing_stops", {})
+    active = {s: t for s, t in ts.items() if t.get("active")}
+    if not active:
+        return "🔄 *Мои Trailing Stop-ы*\n\n📭 Нет активных\n\nУстановить: `/trail BTC 3`"
+    lines = ["🔄 *Мои Trailing Stop-ы*\n"]
+    for symbol, t in active.items():
+        cur = get_price(symbol)
+        cur_price = cur.get("price", 0) if "error" not in cur else 0
+        high = t.get("high_price", 0)
+        pct  = t.get("trail_pct", 0)
+        trigger = high * (1 - pct / 100)
+        if cur_price and high:
+            dist = (cur_price - trigger) / cur_price * 100
+            em = "🟢" if dist > pct else "🟡" if dist > pct/2 else "🔴"
+        else:
+            dist = 0; em = "⚪"
+        coin = symbol.replace("USDT","")
+        lines.append(
+            f"{em} *{coin}* — `{pct}%`\n"
+            f"   📈 Пик: `${high:,.4f}`\n"
+            f"   💵 Тек.: `${cur_price:,.4f}`\n"
+            f"   🎯 Триггер: `${trigger:,.4f}`\n"
+            f"   📏 До стопа: `{dist:.2f}%`\n"
+        )
+    lines.append(f"━━━━━━━━━━━━\nВсего: *{len(active)}*  🟢далеко  🟡близко  🔴критично")
+    return "\n".join(lines)
+
+def trailing_kb(uid):
+    ts = USER_DATA[uid].get("trailing_stops", {})
+    active = [s for s, t in ts.items() if t.get("active")]
+    rows = [[InlineKeyboardButton("🔄 Обновить", callback_data="m_trailing")]]
+    if active:
+        rows.append([InlineKeyboardButton("❌ Снять все", callback_data="trail_clear_all")])
+        for s in active:
+            coin = s.replace("USDT","")
+            rows.append([InlineKeyboardButton(f"🗑 Снять {coin}", callback_data=f"trail_remove__{s}")])
+    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="m_main")])
+    return InlineKeyboardMarkup(rows)
+
+def chart_kb_coins():
+    """Клавиатура выбора монеты для чарта."""
+    coins = ["BTC","ETH","BNB","SOL","XRP","ADA","DOGE","AVAX","DOT","LINK","LTC","NEAR"]
+    rows = []
+    for i in range(0, len(coins), 3):
+        rows.append([InlineKeyboardButton(
+            f"{ce(c)} {c}", callback_data=f"chart_coin_{c}_1h"
+        ) for c in coins[i:i+3]])
+    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="m_main")])
+    return InlineKeyboardMarkup(rows)
+
+def chart_interval_kb(coin):
+    """Клавиатура выбора интервала."""
+    intervals = [("15m","15m"),("1h","1h"),("4h","4h"),("1d","1d")]
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(label, callback_data=f"chart_coin_{coin}_{iv}")
+        for label, iv in intervals
+    ],[InlineKeyboardButton("🔙 Назад", callback_data="m_chart")]])
+
+async def send_chart(bot, chat_id, message_id, coin, interval="1h"):
+    """Генерирует и отправляет чарт через quickchart.io."""
+    import json as _json, urllib.parse, io
+    klines = get_klines(coin, interval, 60)
+    if not klines or len(klines) < 5:
+        return False
+    closes  = [float(k[4]) for k in klines]
+    highs   = [float(k[2]) for k in klines]
+    lows    = [float(k[3]) for k in klines]
+    volumes = [float(k[5]) for k in klines]
+    labels  = [datetime.fromtimestamp(k[0]/1000).strftime("%H:%M" if interval in ["15m","1h"] else "%d/%m") for k in klines]
+
+    # MA20 and MA50
+    def ma(data, n):
+        return [None]*(n-1) + [round(sum(data[i:i+n])/n, 4) for i in range(len(data)-n+1)]
+
+    ma20 = ma(closes, 20)
+    ma50 = ma(closes, 50)
+
+    # RSI
+    rsi_vals = []
+    for i in range(len(closes)):
+        if i < 14:
+            rsi_vals.append(None)
+        else:
+            gains = [max(closes[j]-closes[j-1],0) for j in range(i-13,i+1)]
+            losses = [max(closes[j-1]-closes[j],0) for j in range(i-13,i+1)]
+            ag = sum(gains)/14; al = sum(losses)/14
+            rsi_vals.append(round(100 - 100/(1+ag/al),1) if al else 100)
+
+    chart = {
+        "type": "bar",
+        "data": {
+            "labels": labels[::3],
+            "datasets": [
+                {"type":"line","label":"Цена","data":closes[::3],"borderColor":"#00d2ff",
+                 "borderWidth":2,"pointRadius":0,"fill":False,"yAxisID":"y"},
+                {"type":"line","label":"MA20","data":ma20[::3],"borderColor":"#FFB800",
+                 "borderWidth":1.5,"pointRadius":0,"fill":False,"yAxisID":"y"},
+                {"type":"line","label":"MA50","data":ma50[::3],"borderColor":"#FF6B35",
+                 "borderWidth":1.5,"pointRadius":0,"fill":False,"yAxisID":"y"},
+                {"type":"bar","label":"Объём","data":volumes[::3],
+                 "backgroundColor":"rgba(100,200,100,0.3)","yAxisID":"y2"},
+            ]
+        },
+        "options": {
+            "plugins":{"legend":{"labels":{"color":"#fff","font":{"size":10}}}},
+            "scales":{
+                "x":{"ticks":{"color":"#aaa","maxTicksLimit":8},"grid":{"color":"#333"}},
+                "y":{"position":"left","ticks":{"color":"#00d2ff"},"grid":{"color":"#333"}},
+                "y2":{"position":"right","ticks":{"color":"#4c4"},"grid":{"display":False}},
+            },
+            "backgroundColor":"#1a1a2e"
+        }
+    }
+    url = f"https://quickchart.io/chart?c={urllib.parse.quote(_json.dumps(chart))}&width=600&height=350&bkg=%231a1a2e"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    img_bytes = await resp.read()
+                    s = sym(coin)
+                    cur = get_price(coin)
+                    price = cur.get("price", 0)
+                    rsi_now = next((r for r in reversed(rsi_vals) if r), 0)
+                    caption = (f"{ce(coin)} *{s}* | {interval}\n"
+                               f"💵 `${price:,.4f}` | RSI: `{rsi_now:.1f}`\n"
+                               f"MA20: `${ma20[-1]:,.2f}` | MA50: `${ma50[-1]:,.2f}`")
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=io.BytesIO(img_bytes),
+                        caption=caption,
+                        parse_mode=ParseMode.MARKDOWN,
+                        reply_markup=chart_interval_kb(coin)
+                    )
+                    return True
+    except Exception as e:
+        log.warning(f"Chart error: {e}")
+    return False
+
+
     on=USER_DATA[uid]["auto_enabled"]
     tt=TRADE_TYPES.get(USER_DATA[uid]["auto_type"],"")
     sz=USER_DATA[uid]["auto_size"]; nc=len(USER_DATA[uid]["auto_coins"])
@@ -1173,8 +1361,8 @@ async def cmd_balance(u,c):
     if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); total+=usdt
     for asset,qty in sorted(bals.items(),key=lambda x:-x[1]):
         t=get_price(asset)
-        if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"  • *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
-        else: lines.append(f"  • *{asset}*: `{qty:.6f}`")
+        if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"  {ce(asset)} *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
+        else: lines.append(f"  {ce(asset)} *{asset}*: `{qty:.6f}`")
     lines.append(f"\n💎 *Итого ≈* `${total:.2f}`")
     lines.append(f"\n{'✅ Можно торговать' if usdt>=5 else '⚠️ Пополните USDT (мин $5)'}")
     await u.message.reply_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
@@ -1352,8 +1540,11 @@ async def cb(u,c):
         if usdt>0: lines.append(f"💵 *USDT*: `${usdt:.4f}`"); total+=usdt
         for asset,qty in sorted(bals.items(),key=lambda x:-x[1])[:12]:
             t=get_price(asset)
-            if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"• *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
-            else: lines.append(f"• *{asset}*: `{qty:.6f}`")
+            if "error" not in t:
+                v=qty*t["price"]; total+=v
+                lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}` ≈ `${v:.2f}`")
+            else:
+                lines.append(f"{ce(asset)} *{asset}*: `{qty:.6f}`")
         lines.append(f"\n💎 *Итого:* `${total:.2f}`")
         await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_orders":
@@ -1363,15 +1554,31 @@ async def cb(u,c):
             lines=[f"📖 *Сделки* ({len(trades)})\n"]
             for o in trades[:10]:
                 e="🟢" if o["side"]=="BUY" else "🔴"
-                lines.append(f"{e} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_")
+                lines.append(f"{e} {ce(o['symbol'].replace('USDT',''))} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_")
             await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
         else:
             local=USER_DATA[uid]["orders"]
             txt=("📖 *Сделки (бот)*\n\n"+"\n".join(
-                f"{'🟢' if o['side']=='BUY' else '🔴'} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_"
+                f"{'🟢' if o['side']=='BUY' else '🔴'} {ce(o['symbol'].replace('USDT',''))} *{o['symbol']}* `${o['total']:.2f}` — _{o['time']}_"
                 for o in local[:8])) if local else "📭 *Нет сделок*"
             await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,reply_markup=back())
-    elif d=="m_prices":
+    elif d=="m_chart":
+        await q.edit_message_text(
+            "📉 *График — Выберите монету:*",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=chart_kb_coins()
+        )
+    elif d.startswith("chart_coin_"):
+        parts = d.split("_")
+        coin = parts[2]; interval = parts[3] if len(parts)>3 else "1h"
+        await q.edit_message_text(f"📊 Загружаю чарт {ce(coin)} {coin} {interval}...",
+                                   parse_mode=ParseMode.MARKDOWN)
+        ok = await send_chart(c.bot, u.effective_chat.id,
+                              q.message.message_id, coin, interval)
+        if not ok:
+            await c.bot.send_message(u.effective_chat.id,
+                "❌ Не удалось загрузить чарт. Попробуй снова.",
+                reply_markup=chart_kb_coins())
         lines=["💹 *ТОП 15 ЦЕН*\n"]
         for coin in TOP_COINS:
             t=get_price(coin)
@@ -1384,9 +1591,9 @@ async def cb(u,c):
         res=[(s.replace("USDT",""),v["change"],v["price"]) for s,v in prices.items() if "error" not in v]
         res.sort(key=lambda x:x[1],reverse=True)
         lines=["📋 *СКРИНЕР*\n","🟢 *Рост:*"]
-        for coin,chg,pr in res[:5]: lines.append(f"  • *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
+        for coin,chg,pr in res[:5]: lines.append(f"  {ce(coin)} *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
         lines.append("\n🔴 *Падение:*")
-        for coin,chg,pr in res[-5:]: lines.append(f"  • *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
+        for coin,chg,pr in res[-5:]: lines.append(f"  {ce(coin)} *{coin}*: `{chg:+.2f}%` @ `${pr:,.4f}`")
         await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_news":
         news=get_news(6); lines=["📰 *Крипто-новости*\n"]
@@ -1518,7 +1725,7 @@ async def cb(u,c):
             lines=["🔄 *DCA Боты*\n"]
             for b in bots:
                 nxt=datetime.fromtimestamp(b["next_run"]).strftime("%d.%m %H:%M")
-                lines.append(f"• *{b['symbol']}* `${b['amount']}` / `{b['interval_h']}ч` → `{nxt}`")
+                lines.append(f"{ce(b['symbol'].replace('USDT',''))} *{b['symbol']}* `${b['amount']}` / `{b['interval_h']}ч` → `{nxt}`")
             txt="\n".join(lines)
         await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
@@ -1539,7 +1746,7 @@ async def cb(u,c):
         else:
             lines=["🎯 *Grid Боты*\n"]
             for b in bots:
-                lines.append(f"• *{b['symbol']}* `${b['low']:,.0f}`-`${b['high']:,.0f}` | Сделок: `{b['trades']}`")
+                lines.append(f"{ce(b['symbol'].replace('USDT',''))} *{b['symbol']}* `${b['low']:,.0f}`-`${b['high']:,.0f}` | Сделок: `{b['trades']}`")
             txt="\n".join(lines)
         await q.edit_message_text(txt,parse_mode=ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup([
@@ -1742,6 +1949,22 @@ async def cb(u,c):
     elif d=="alert_clear":
         USER_DATA[uid]["alerts"]=[]
         await q.edit_message_text("🗑 Удалены.",reply_markup=back("m_main"))
+
+    elif d=="m_trailing":
+        await q.edit_message_text(trailing_status_text(uid),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=trailing_kb(uid))
+    elif d=="trail_clear_all":
+        for s in USER_DATA[uid].get("trailing_stops",{}):
+            USER_DATA[uid]["trailing_stops"][s]["active"]=False
+        save_state()
+        await q.edit_message_text("✅ Все Trailing Stop-ы сняты",reply_markup=back("m_main"))
+    elif d.startswith("trail_remove__"):
+        symbol=d.replace("trail_remove__","")
+        if symbol in USER_DATA[uid].get("trailing_stops",{}):
+            USER_DATA[uid]["trailing_stops"][symbol]["active"]=False
+            save_state()
+        await q.edit_message_text(trailing_status_text(uid),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=trailing_kb(uid))
 
     # ── SCALPER ───────────────────────────────────────────────────
     elif d=="m_scalper":
@@ -2236,17 +2459,19 @@ async def daily_report_job(ctx):
             for asset,qty in bals.items():
                 if asset=="USDT": continue
                 t=get_price(asset)
-                if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"• *{asset}*: `${v:.2f}`")
+                if "error" not in t:
+                    v=qty*t["price"]; total+=v
+                    lines.append(f"{ce(asset)} *{asset}*: `${v:.2f}`")
             lines.append(f"\n💎 *Итого:* `${total:.2f}`")
             fg=fear_greed()
             lines.append(f"{fg['emoji']} Страх/Жадность: `{fg['value']}` — {fg['label']}")
-            # Best/worst coins
             prices=get_all_prices()
             sorted_p=sorted(prices.items(),key=lambda x:x[1].get("change",0),reverse=True)
             if sorted_p:
                 best=sorted_p[0]; worst=sorted_p[-1]
-                lines.append(f"\n🟢 Лучший: *{best[0].replace('USDT','')}* `{best[1].get('change',0):+.2f}%`")
-                lines.append(f"🔴 Худший: *{worst[0].replace('USDT','')}* `{worst[1].get('change',0):+.2f}%`")
+                bc_name=best[0].replace("USDT",""); wc_name=worst[0].replace("USDT","")
+                lines.append(f"\n🟢 Лучший: {ce(bc_name)} *{bc_name}* `{best[1].get('change',0):+.2f}%`")
+                lines.append(f"🔴 Худший: {ce(wc_name)} *{wc_name}* `{worst[1].get('change',0):+.2f}%`")
             await ctx.bot.send_message(chat_id,"\n".join(lines),
                                         parse_mode=ParseMode.MARKDOWN,reply_markup=back())
         except Exception as e: log.error(f"Daily report: {e}")
