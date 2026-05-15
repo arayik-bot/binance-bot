@@ -233,56 +233,9 @@ def load_state():
         log.error(f"load_state error: {e}")
 
 
-async def webhook_job(ctx):
-    """Обрабатывает сигналы от TradingView каждые 5 секунд."""
-    while not _webhook_queue.empty():
-        try:
-            signal = _webhook_queue.get_nowait()
-            action = signal.get("action","").lower()  # buy / sell
-            symbol = signal.get("symbol","").upper()
-            amount = float(signal.get("amount", 10))
-
-            if action not in ("buy","sell") or not symbol:
-                continue
-
-            coin = symbol.replace("USDT","")
-            side = "BUY" if action == "buy" else "SELL"
-
-            log.info(f"TradingView signal: {side} {symbol} ${amount}")
-
-            # Execute for all users with auto_enabled OR notify all users
-            notified = False
-            for uid, data in USER_DATA.items():
-                chat_id = data.get("chat_id")
-                if not chat_id:
-                    continue
-
-                # Place order
-                order = place_order(coin, side, amount)
-
-                if order.get("ok"):
-                    update_portfolio(uid, order)
-                    record_order(uid, order, note="📡 TradingView Signal")
-                    await ctx.bot.send_message(chat_id,
-                        f"📡 *TradingView Сигнал исполнен!*\n\n"
-                        f"{ce(coin)} *{symbol}* — {'🟢 КУПИЛ' if side=='BUY' else '🔴 ПРОДАЛ'}\n"
-                        f"💵 Цена: `${order['price']:,.4f}`\n"
-                        f"📦 Кол-во: `{order['qty']:.6f}`\n"
-                        f"💰 Итого: `${order['total']:.2f}`",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await ctx.bot.send_message(chat_id,
-                        f"📡 *TradingView Сигнал*\n\n"
-                        f"{ce(coin)} *{symbol}* {side}\n"
-                        f"❌ Ошибка: `{order.get('error','Unknown')}`",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                notified = True
-                break  # one user only
-
-        except Exception as e:
-            log.error(f"Webhook job error: {e}")
+async def save_state_job(ctx):
+    """Job — автосохранение каждые 60 секунд."""
+    save_state()
 
 
 # ── BINANCE CLIENT ────────────────────────────────────────────────
@@ -2424,63 +2377,13 @@ async def change_alert_job(ctx):
     except Exception as e: log.error(f"Change alert: {e}")
 
 # ── HEALTH SERVER ─────────────────────────────────────────────────
-# ── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
-# TradingView alert message format:
-# {"action":"buy","symbol":"BTCUSDT","amount":10,"secret":"YOUR_SECRET"}
-# or plain text: "buy BTCUSDT 10 YOUR_SECRET"
-
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "arayik_bot_secret")
-
-# Queue for passing webhook signals to async bot
-import queue
-_webhook_queue = queue.Queue()
-
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers()
-        self.wfile.write(b"ArayikBot v8.0 OK")
-
-    def do_POST(self):
-        try:
-            length  = int(self.headers.get("Content-Length", 0))
-            body    = self.rfile.read(length).decode("utf-8").strip()
-            log.info(f"Webhook received: {body}")
-
-            # Parse JSON or plain text
-            signal = {}
-            try:
-                signal = json.loads(body)
-            except:
-                # Plain text format: "buy BTCUSDT 10 secret"
-                parts = body.split()
-                if len(parts) >= 2:
-                    signal = {
-                        "action": parts[0].lower(),
-                        "symbol": parts[1].upper(),
-                        "amount": float(parts[2]) if len(parts) > 2 else 10,
-                        "secret": parts[3] if len(parts) > 3 else ""
-                    }
-
-            # Validate secret
-            if signal.get("secret","") != WEBHOOK_SECRET:
-                self.send_response(403); self.end_headers()
-                self.wfile.write(b"Invalid secret")
-                log.warning("Webhook: invalid secret")
-                return
-
-            # Add to queue for async processing
-            _webhook_queue.put(signal)
-            self.send_response(200); self.end_headers()
-            self.wfile.write(b"Signal received")
-
-        except Exception as e:
-            log.error(f"Webhook error: {e}")
-            self.send_response(500); self.end_headers()
-
-    def log_message(self, *a): pass
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK v8.0")
+    def log_message(self,*a): pass
 
 def health():
-    HTTPServer(("0.0.0.0", PORT), H).serve_forever()
+    HTTPServer(("0.0.0.0",PORT),H).serve_forever()
 
 # ── MAIN ──────────────────────────────────────────────────────────
 async def main():
@@ -2505,13 +2408,12 @@ async def main():
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
-    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)
-    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)
-    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)
+    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
+    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
+    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
     app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
-    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)
-    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)
-    app.job_queue.run_repeating(webhook_job,      interval=5,    first=5)
+    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
+    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
     log.info("🚀 Bot v8.0 started!")
     async with app:
         await app.initialize(); await app.start()
