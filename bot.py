@@ -2415,9 +2415,22 @@ async def main():
     app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
     app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
     log.info("🚀 Bot v8.0 started!")
+    async def error_handler(update, context):
+        """Обрабатывает ошибки polling — не даёт боту упасть."""
+        log.error(f"Telegram error: {context.error}")
+
+    app.add_error_handler(error_handler)
+
     async with app:
         await app.initialize(); await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
+        await app.updater.start_polling(
+            drop_pending_updates=True,
+            allowed_updates=["message","callback_query"],
+            read_timeout=30,
+            write_timeout=30,
+            connect_timeout=30,
+            pool_timeout=30,
+        )
         await asyncio.Event().wait()
 
 if __name__=="__main__":
