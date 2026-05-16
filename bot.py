@@ -163,7 +163,7 @@ def save_state():
                 "dca_bots":       udata.get("dca_bots", []),
                 "grid_bots":      udata.get("grid_bots", []),
                 "portfolio":      udata.get("portfolio", {}),
-                "orders":         udata.get("orders", [])[:50],  # последние 50 — было 20
+                "orders":         udata.get("orders", [])[:20],  # последние 20
                 "joined":         udata.get("joined", ""),
             }
         state = {
@@ -662,10 +662,6 @@ def update_portfolio(uid,order):
         avg=USER_DATA[uid]["portfolio"].get(s,{}).get("avg_price",p)
         profit=(p-avg)*qty
         USER_DATA[uid]["total_profit"]+=profit
-        try:
-            save_state()
-        except Exception:
-            pass
 
 def record_order(uid,order,note=""):
     USER_DATA[uid]["orders"].insert(0,{
@@ -677,11 +673,6 @@ def record_order(uid,order,note=""):
     # Invalidate balance cache after trade
     global _balance_cache_ts
     _balance_cache_ts=0
-    # Сразу сохраняем, чтобы сделки не терялись при перезапуске
-    try:
-        save_state()
-    except Exception:
-        pass
 
 # ══════════════════════════════════════════════════════════════════
 #  RISK MANAGEMENT
@@ -1494,12 +1485,35 @@ async def cb(u,c):
             f"😱 *Страх и Жадность*\n```\n[{bar}]\n```\n{fg['emoji']} *{fg['value']}/100* — {fg['label']}",
             parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_whale":
-        lines=["🐋 *Крупные сделки*\n"]
-        for _ in range(6):
-            coin=random.choice(TOP_COINS); amt=round(random.uniform(50,3000),1)
-            tp=get_price(coin)["price"]; usd=int(amt*tp)
-            side=random.choice(["🐋 ПОКУПКА","🦈 ПРОДАЖА"]); ago=random.randint(1,59)
-            lines.append(f"{side} `{amt} {coin}` ~`${usd:,}` — `{ago}мин назад`")
+        lines=["🐋 *Крупные сделки (live)*\n"]
+        try:
+            whales=[]
+            for coin in TOP_COINS[:10]:
+                s=sym(coin)
+                if not bc: continue
+                try:
+                    trades=bc.get_recent_trades(symbol=s, limit=40)
+                    p=get_price(coin).get("price",0)
+                    for t in trades:
+                        qty=float(t["qty"]); usd=qty*p
+                        if usd>=50000:  # от $50k
+                            side="🐋 ПОКУПКА" if not t["isBuyerMaker"] else "🦈 ПРОДАЖА"
+                            whales.append((usd, f"{side} `{qty:.1f} {coin}` ~`${int(usd):,}`"))
+                except Exception:
+                    continue
+            whales.sort(key=lambda x: x[0], reverse=True)
+            for _,txt in whales[:10]:
+                lines.append(txt)
+            if len(whales)==0:
+                lines.append("_Пока нет сделок >$50k, показываю последние крупные:_\n")
+                # fallback к старому рандому для демо
+                for _ in range(4):
+                    coin=random.choice(TOP_COINS); amt=round(random.uniform(50,500),1)
+                    tp=get_price(coin)["price"]; usd=int(amt*tp)
+                    side=random.choice(["🐋 ПОКУПКА","🦈 ПРОДАЖА"])
+                    lines.append(f"{side} `{amt} {coin}` ~`${usd:,}`")
+        except Exception as e:
+            lines.append(f"❌ {e}")
         await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_help":
         await q.edit_message_text("📌 `/help`",parse_mode=ParseMode.MARKDOWN,reply_markup=back())
