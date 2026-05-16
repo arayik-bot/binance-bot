@@ -163,7 +163,7 @@ def save_state():
                 "dca_bots":       udata.get("dca_bots", []),
                 "grid_bots":      udata.get("grid_bots", []),
                 "portfolio":      udata.get("portfolio", {}),
-                "orders":         udata.get("orders", [])[:20],  # последние 20
+                "orders":         udata.get("orders", [])[:50],  # последние 50 — было 20
                 "joined":         udata.get("joined", ""),
             }
         state = {
@@ -662,6 +662,10 @@ def update_portfolio(uid,order):
         avg=USER_DATA[uid]["portfolio"].get(s,{}).get("avg_price",p)
         profit=(p-avg)*qty
         USER_DATA[uid]["total_profit"]+=profit
+        try:
+            save_state()
+        except Exception:
+            pass
 
 def record_order(uid,order,note=""):
     USER_DATA[uid]["orders"].insert(0,{
@@ -673,6 +677,11 @@ def record_order(uid,order,note=""):
     # Invalidate balance cache after trade
     global _balance_cache_ts
     _balance_cache_ts=0
+    # Сразу сохраняем, чтобы сделки не терялись при перезапуске
+    try:
+        save_state()
+    except Exception:
+        pass
 
 # ══════════════════════════════════════════════════════════════════
 #  RISK MANAGEMENT
