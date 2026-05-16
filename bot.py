@@ -173,8 +173,7 @@ def save_state():
                 "daily_pnl":    SCALPER_STATE["daily_pnl"],
                 "total_trades": SCALPER_STATE["total_trades"],
                 "chat_id":      SCALPER_STATE["chat_id"],
-            },
-            "trades_cache": _trades_cache[:100],  # сохраняем последние 100 сделок
+            }
         }
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2, default=str)
@@ -220,14 +219,6 @@ def load_state():
         SCALPER_STATE["daily_pnl"]    = sc.get("daily_pnl", 0.0)
         SCALPER_STATE["total_trades"] = sc.get("total_trades", 0)
         SCALPER_STATE["chat_id"]      = sc.get("chat_id")
-
-        # Восстановление кэша сделок — чтобы история не пропадала после рестарта
-        global _trades_cache, _trades_cache_ts
-        saved_trades = state.get("trades_cache", [])
-        if saved_trades:
-            _trades_cache    = saved_trades
-            _trades_cache_ts = time.time() - 60  # чуть устаревший, обновится при первом запросе
-            log.info(f"📊 Сделок восстановлено из кэша: {len(saved_trades)}")
 
         # Подсчёт восстановленного
         users_cnt    = len(state.get("users", {}))
@@ -2074,4 +2065,360 @@ def _scalper_analyze(klines, s):
     ef = _scalper_ema(closes, s["ema_fast"]); es = _scalper_ema(closes, s["ema_slow"])
     rsi = _scalper_rsi(closes)
     avg_vol = sum(volumes[-21:-1]) / 20
-    vol_spike = volumes[-1] >
+    vol_spike = volumes[-1] >= avg_vol * s["volume_mult"]
+    bull = ef[-2] < es[-2] and ef[-1] > es[-1]
+    bear = ef[-2] > es[-2] and ef[-1] < es[-1]
+    signal = None
+    if bull and rsi < 55 and vol_spike: signal = "LONG"
+    elif bear and rsi > 45 and vol_spike: signal = "SHORT"
+    return {"signal": signal, "price": closes[-1], "rsi": round(rsi, 1),
+            "ef": round(ef[-1], 4), "es": round(es[-1], 4),
+            "vol": round(volumes[-1], 0), "avg_vol": round(avg_vol, 0)}
+
+def _scalper_log(msg):
+    ts = datetime.now().strftime("%H:%M:%S"); entry = f"[{ts}] {msg}"
+    SCALPER_STATE["log"].insert(0, entry); SCALPER_STATE["log"] = SCALPER_STATE["log"][:20]
+    log.info(f"[SCALPER] {msg}")
+
+async def _scalper_notify(bot_inst, msg):
+    chat_id = SCALPER_STATE.get("chat_id")
+    if chat_id:
+        try: await bot_inst.send_message(chat_id, msg, parse_mode=ParseMode.MARKDOWN)
+        except Exception as e: log.warning(f"Scalper notify: {e}")
+
+def _scalper_get_futures_balance():
+    if not bc: return 100.0
+    try:
+        acc = bc.futures_account()
+        for a in acc.get("assets", []):
+            if a["asset"] == "USDT": return float(a["availableBalance"])
+    except Exception as e: log.warning(f"Futures balance: {e}")
+    return 0.0
+
+def _scalper_place_order(symbol, side, qty):
+    if not bc:
+        price = MOCK.get(symbol, 100.0) * random.uniform(0.999, 1.001)
+        return {"ok": True, "price": round(price, 4), "qty": qty,
+                "orderId": f"SCALP-DEMO-{int(time.time())}", "mock": True}
+    try:
+        order = bc.futures_create_order(symbol=symbol, side=side, type="MARKET", quantity=str(qty))
+        fp = float(order.get("avgPrice", 0)) or float(order.get("price", 0))
+        fq = float(order.get("executedQty", qty))
+        return {"ok": True, "price": fp, "qty": fq, "orderId": order.get("orderId"), "mock": False}
+    except Exception as e: return {"ok": False, "error": str(e)}
+
+def _scalper_set_sl_tp(symbol, close_side, sl_price, tp_price):
+    if not bc: return
+    try: bc.futures_create_order(symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
+            stopPrice=str(round(tp_price, 2)), closePosition="true", timeInForce="GTE_GTC")
+    except Exception as e: log.warning(f"Scalper TP: {e}")
+    try: bc.futures_create_order(symbol=symbol, side=close_side, type="STOP_MARKET",
+            stopPrice=str(round(sl_price, 2)), closePosition="true", timeInForce="GTE_GTC")
+    except Exception as e: log.warning(f"Scalper SL: {e}")
+
+def _scalper_cancel_orders(symbol):
+    if bc:
+        try: bc.futures_cancel_all_open_orders(symbol=symbol)
+        except Exception as e: log.warning(f"Cancel {symbol}: {e}")
+
+def _scalper_get_open_positions():
+    if not bc: return []
+    try: return [p for p in bc.futures_position_information() if abs(float(p.get("positionAmt",0))) > 0]
+    except: return []
+
+async def _scalper_loop(bot_inst):
+    s = SCALPER_STATE["settings"]
+    if bc:
+        for symbol in s["symbols"]:
+            try: bc.futures_change_leverage(symbol=symbol, leverage=s["leverage"])
+            except: pass
+    await _scalper_notify(bot_inst,
+        f"⚡ *Scalper Engine ЗАПУЩЕН*\n\n"
+        f"📊 Символы: `{', '.join(s['symbols'])}`\n"
+        f"⚡ Плечо: `{s['leverage']}x` | 🎯 TP: `{s['tp_pct']}%` | 🛑 SL: `{s['sl_pct']}%`\n"
+        f"📦 Размер: `{s['position_pct']}%` | 🔢 Макс: `{s['max_positions']}` | 🛡 Лимит: `${s['daily_loss_limit']}`")
+    while SCALPER_STATE["running"]:
+        try:
+            today = datetime.utcnow().date()
+            if SCALPER_STATE["daily_date"] != today:
+                SCALPER_STATE["daily_pnl"] = 0.0; SCALPER_STATE["daily_date"] = today
+            if SCALPER_STATE["daily_pnl"] <= -s["daily_loss_limit"]:
+                await _scalper_notify(bot_inst,
+                    f"🚨 *Дневной лимит убытка достигнут!* `${SCALPER_STATE['daily_pnl']:.2f}`\nScalper остановлен.")
+                SCALPER_STATE["running"] = False; break
+            open_pos = _scalper_get_open_positions()
+            active_symbols = {p["symbol"] for p in open_pos}
+            for symbol in s["symbols"]:
+                if not SCALPER_STATE["running"]: break
+                try: await _scalper_process(bot_inst, symbol, active_symbols, open_pos, s)
+                except Exception as e: _scalper_log(f"Error {symbol}: {e}")
+            await asyncio.sleep(s["loop_sleep"])
+        except asyncio.CancelledError: break
+        except Exception as e: _scalper_log(f"Loop error: {e}"); await asyncio.sleep(30)
+    _scalper_log("Stopped")
+
+async def _scalper_process(bot_inst, symbol, active_symbols, open_pos, s):
+    if symbol in active_symbols:
+        await _scalper_manage(bot_inst, symbol, open_pos, s); return
+    if len(active_symbols) >= s["max_positions"]: return
+    klines = get_klines(symbol, "1m", 60)
+    if not klines: return
+    result = _scalper_analyze(klines, s)
+    if not result["signal"]: return
+    signal = result["signal"]; price = result["price"]
+    balance = _scalper_get_futures_balance()
+    usdt_sz = balance * (s["position_pct"] / 100) * s["leverage"]
+    step, min_qty = get_lot_size(symbol); qty = round_qty(usdt_sz / price, step)
+    if qty < min_qty or qty <= 0: return
+    if signal == "LONG":
+        sl_price = price * (1 - s["sl_pct"]/100); tp_price = price * (1 + s["tp_pct"]/100)
+        order_side = "BUY"; close_side = "SELL"
+    else:
+        sl_price = price * (1 + s["sl_pct"]/100); tp_price = price * (1 - s["tp_pct"]/100)
+        order_side = "SELL"; close_side = "BUY"
+    order = _scalper_place_order(symbol, order_side, qty)
+    if not order.get("ok"): _scalper_log(f"Order failed {symbol}: {order.get('error')}"); return
+    fp = order["price"] or price
+    _scalper_set_sl_tp(symbol, close_side, sl_price, tp_price)
+    SCALPER_STATE["total_trades"] += 1
+    SCALPER_STATE["positions"][symbol] = {"side": signal, "entry": fp, "qty": qty,
+        "sl": sl_price, "tp": tp_price, "opened": datetime.utcnow().strftime("%H:%M:%S")}
+    mt = " _(Демо)_" if order.get("mock") else (" _(Testnet)_" if USE_TESTNET else "")
+    side_e = "🟢 LONG" if signal == "LONG" else "🔴 SHORT"
+    _scalper_log(f"OPEN {symbol} {signal} @ ${fp:.4f}")
+    await _scalper_notify(bot_inst,
+        f"⚡ *Scalper — Позиция открыта*{mt}\n\n"
+        f"🪙 `{symbol}` {side_e}\n"
+        f"💵 Вход: `${fp:,.4f}` | 📦 `{qty}`\n"
+        f"🛑 SL: `${sl_price:,.4f}` | 🎯 TP: `${tp_price:,.4f}`\n"
+        f"📊 RSI: `{result['rsi']}` | 📈 Vol x`{round(result['vol']/(result['avg_vol'] or 1),1)}`\n"
+        f"🔢 Сделка #{SCALPER_STATE['total_trades']}")
+
+async def _scalper_manage(bot_inst, symbol, open_pos, s):
+    local = SCALPER_STATE["positions"].get(symbol)
+    pos_data = next((p for p in open_pos if p["symbol"] == symbol), None)
+    if pos_data is None:
+        if local:
+            del SCALPER_STATE["positions"][symbol]
+            cur = get_price(symbol); cur_price = cur.get("price", local["entry"])
+            entry = local["entry"]
+            pnl_pct = (cur_price - entry)/entry*100 if local["side"]=="LONG" else (entry - cur_price)/entry*100
+            pnl_usd = pnl_pct/100 * entry * local["qty"] * s["leverage"]
+            SCALPER_STATE["daily_pnl"] += pnl_usd; emoji = "✅" if pnl_usd >= 0 else "❌"
+            _scalper_log(f"CLOSE {symbol} P&L ${pnl_usd:+.2f}")
+            await _scalper_notify(bot_inst,
+                f"{emoji} *Позиция закрыта*\n🪙 `{symbol}` `{local['side']}`\n"
+                f"💵 `${entry:,.4f}` → `${cur_price:,.4f}`\n"
+                f"📊 P&L: `{pnl_pct:+.2f}%` (`${pnl_usd:+.2f}`)\n"
+                f"📅 Дневной P&L: `${SCALPER_STATE['daily_pnl']:+.2f}`")
+        return
+    if not local or not s["use_trailing"]: return
+    try:
+        cur_price = float(pos_data.get("markPrice", local["entry"]))
+        trail_dist = cur_price * (s["trailing_pct"] / 100)
+        if local["side"] == "LONG":
+            pnl_pct = (cur_price - local["entry"]) / local["entry"] * 100
+            if pnl_pct >= s["tp_pct"] / 2:
+                new_sl = cur_price - trail_dist
+                if new_sl > local["sl"]:
+                    local["sl"] = new_sl; _scalper_cancel_orders(symbol)
+                    if bc: bc.futures_create_order(symbol=symbol, side="SELL", type="STOP_MARKET",
+                        stopPrice=str(round(new_sl, 2)), closePosition="true", timeInForce="GTE_GTC")
+        else:
+            pnl_pct = (local["entry"] - cur_price) / local["entry"] * 100
+            if pnl_pct >= s["tp_pct"] / 2:
+                new_sl = cur_price + trail_dist
+                if new_sl < local["sl"]:
+                    local["sl"] = new_sl; _scalper_cancel_orders(symbol)
+                    if bc: bc.futures_create_order(symbol=symbol, side="BUY", type="STOP_MARKET",
+                        stopPrice=str(round(new_sl, 2)), closePosition="true", timeInForce="GTE_GTC")
+    except Exception as e: log.warning(f"Trail {symbol}: {e}")
+
+async def scalper_start(bot_inst, chat_id):
+    if SCALPER_STATE["running"]: return False
+    SCALPER_STATE["running"] = True; SCALPER_STATE["chat_id"] = chat_id
+    SCALPER_STATE["task"] = asyncio.create_task(_scalper_loop(bot_inst)); return True
+
+async def scalper_stop(bot_inst):
+    SCALPER_STATE["running"] = False
+    if SCALPER_STATE["task"]: SCALPER_STATE["task"].cancel(); SCALPER_STATE["task"] = None
+    await _scalper_notify(bot_inst, "🛑 *Scalper Engine остановлен*")
+
+def scalper_status_text():
+    s = SCALPER_STATE; st = s["settings"]; pos = _scalper_get_open_positions()
+    status = "🟢 РАБОТАЕТ" if s["running"] else "🔴 ОСТАНОВЛЕН"
+    lines = [f"⚡ *Scalper Engine*\n", f"⚙️ Статус: *{status}*",
+             f"💵 Дн. P&L: `${s['daily_pnl']:+.2f}` | 🔢 Сделок: `{s['total_trades']}`",
+             f"⚡ Плечо: `{st['leverage']}x` | 🎯 TP: `{st['tp_pct']}%` | 🛑 SL: `{st['sl_pct']}%`",
+             f"━━━━━━━━━━━━━━━━"]
+    if pos:
+        lines.append(f"📊 *Открытые ({len(pos)}):*")
+        for p in pos:
+            amt = float(p["positionAmt"]); upnl = float(p["unRealizedProfit"])
+            ep = float(p["entryPrice"]); side = "🟢 LONG" if amt > 0 else "🔴 SHORT"
+            lines.append(f"{side} `{p['symbol']}` {'✅' if upnl>=0 else '❌'} uPnL `${upnl:+.2f}`")
+    else: lines.append("📭 Нет открытых позиций")
+    if s["log"]:
+        lines += [f"━━━━━━━━━━━━━━━━", "*Лог:*"] + [f"`{e}`" for e in s["log"][:4]]
+    return "\n".join(lines)
+
+def scalper_kb():
+    s = SCALPER_STATE
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏹ Остановить" if s["running"] else "▶️ Запустить",
+                              callback_data="scalper_toggle")],
+        [InlineKeyboardButton("🔄 Обновить",   callback_data="scalper_status"),
+         InlineKeyboardButton("❌ Закрыть всё",callback_data="scalper_close_all")],
+        [InlineKeyboardButton("⚙️ Настройки",  callback_data="scalper_settings")],
+        [InlineKeyboardButton("🔙 Назад",      callback_data="m_main")],
+    ])
+
+async def cmd_scalper(u, c):
+    uid = u.effective_user.id; USER_DATA[uid]["chat_id"] = u.effective_chat.id
+    await u.message.reply_text(scalper_status_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=scalper_kb())
+
+async def cmd_scalper_set(u, c):
+    args = c.args
+    if len(args) < 2:
+        await u.message.reply_text(
+            "📌 `/scalper_set tp 1.0`\n"
+            "Ключи: `tp sl leverage position_pct daily_limit max_positions trailing trailing_pct`",
+            parse_mode=ParseMode.MARKDOWN); return
+    key, val = args[0].lower(), args[1]; s = SCALPER_STATE["settings"]
+    mapping = {"tp":("tp_pct",float),"sl":("sl_pct",float),"leverage":("leverage",int),
+               "position_pct":("position_pct",float),"daily_limit":("daily_loss_limit",float),
+               "max_positions":("max_positions",int),"trailing":("use_trailing",lambda x:x.lower()=="true"),
+               "trailing_pct":("trailing_pct",float),"loop_sleep":("loop_sleep",int),"volume_mult":("volume_mult",float)}
+    if key not in mapping:
+        await u.message.reply_text(f"❌ Неизвестный ключ: `{key}`", parse_mode=ParseMode.MARKDOWN); return
+    attr, cast = mapping[key]
+    try:
+        s[attr] = cast(val)
+        await u.message.reply_text(f"✅ `{attr}` = `{s[attr]}`", parse_mode=ParseMode.MARKDOWN)
+    except ValueError:
+        await u.message.reply_text(f"❌ Неверное значение: `{val}`", parse_mode=ParseMode.MARKDOWN)
+
+async def dca_job(ctx):
+    now=time.time()
+    for uid,data in list(USER_DATA.items()):
+        for bot in data.get("dca_bots",[]):
+            if not bot.get("active"): continue
+            if now<bot["next_run"]: continue
+            order=place_order(bot["symbol"],"BUY",bot["amount"])
+            bot["next_run"]=now+bot["interval_h"]*3600
+            bot["runs"]+=1; bot["total_invested"]+=bot["amount"]
+            chat_id=bot.get("chat_id")
+            if chat_id and order["ok"]:
+                mt=" _(Демо)_" if order.get("mock") else ""
+                try:
+                    await ctx.bot.send_message(chat_id,
+                        f"🔄 *DCA Покупка*{mt}\n\n"
+                        f"*{bot['symbol']}* `{order['qty']:.6f}` @ `${order['price']:,.4f}`\n"
+                        f"Сумма: `${order['total']:.2f}` | Раз: `{bot['runs']}`",
+                        parse_mode=ParseMode.MARKDOWN)
+                except: pass
+
+async def daily_report_job(ctx):
+    """Send daily PnL report at configured hour."""
+    now=datetime.utcnow()
+    if now.hour!=DAILY_REPORT_HOUR: return
+    for uid,data in list(USER_DATA.items()):
+        if not data.get("daily_report"): continue
+        chat_id=data.get("chat_id")
+        if not chat_id: continue
+        try:
+            bals=get_real_balance(); bals.pop("_error",None); bals.pop("_mock",None)
+            usdt=bals.get("USDT",0); total=usdt
+            lines=["📊 *Ежедневный отчёт*\n",
+                   f"📅 {now.strftime('%d.%m.%Y')}\n"]
+            for asset,qty in bals.items():
+                if asset=="USDT": continue
+                t=get_price(asset)
+                if "error" not in t: v=qty*t["price"]; total+=v; lines.append(f"• *{asset}*: `${v:.2f}`")
+            lines.append(f"\n💎 *Итого:* `${total:.2f}`")
+            fg=fear_greed()
+            lines.append(f"{fg['emoji']} Страх/Жадность: `{fg['value']}` — {fg['label']}")
+            # Best/worst coins
+            prices=get_all_prices()
+            sorted_p=sorted(prices.items(),key=lambda x:x[1].get("change",0),reverse=True)
+            if sorted_p:
+                best=sorted_p[0]; worst=sorted_p[-1]
+                lines.append(f"\n🟢 Лучший: *{best[0].replace('USDT','')}* `{best[1].get('change',0):+.2f}%`")
+                lines.append(f"🔴 Худший: *{worst[0].replace('USDT','')}* `{worst[1].get('change',0):+.2f}%`")
+            await ctx.bot.send_message(chat_id,"\n".join(lines),
+                                        parse_mode=ParseMode.MARKDOWN,reply_markup=back())
+        except Exception as e: log.error(f"Daily report: {e}")
+
+async def change_alert_job(ctx):
+    """Check % change alerts efficiently using bulk price fetch."""
+    try:
+        prices=get_all_prices()
+        for uid,data in list(USER_DATA.items()):
+            triggered,remaining=[],[]
+            for alert in data.get("alerts",[]):
+                if alert["condition"]!="change": remaining.append(alert); continue
+                s=alert["symbol"]
+                if s in prices:
+                    chg=abs(prices[s].get("change",0))
+                    if chg>=alert["price"]: triggered.append((alert,prices[s]["price"],prices[s]))
+                    else: remaining.append(alert)
+                else: remaining.append(alert)
+            data["alerts"]=remaining
+            for alert,cur,ticker in triggered:
+                chat_id=alert.get("chat_id")
+                if chat_id:
+                    try:
+                        await ctx.bot.send_message(chat_id,
+                            f"📊 *% АЛЕРТ!*\n\n"
+                            f"*{alert['symbol']}* изменился на `{ticker.get('change',0):+.2f}%`\n"
+                            f"Текущая: `${cur:,.4f}`",
+                            parse_mode=ParseMode.MARKDOWN)
+                    except: pass
+    except Exception as e: log.error(f"Change alert: {e}")
+
+# ── HEALTH SERVER ─────────────────────────────────────────────────
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK v8.0")
+    def log_message(self,*a): pass
+
+def health():
+    HTTPServer(("0.0.0.0",PORT),H).serve_forever()
+
+# ── MAIN ──────────────────────────────────────────────────────────
+async def main():
+    if TELEGRAM_TOKEN=="YOUR_TOKEN":
+        print("Set TELEGRAM_TOKEN!"); return
+    Thread(target=health,daemon=True).start()
+
+    # Восстановление состояния после перезапуска
+    load_state()
+
+    app=Application.builder().token(TELEGRAM_TOKEN).build()
+    for cmd,fn in [
+        ("start",cmd_start),("help",cmd_help),
+        ("buy",cmd_buy),("sell",cmd_sell),
+        ("trail",cmd_trail),("dca",cmd_dca),("grid",cmd_grid),
+        ("auto",cmd_auto),("scan",cmd_scan),
+        ("price",cmd_price),("portfolio",cmd_portfolio),
+        ("pnl",cmd_pnl),("orders",cmd_orders),("balance",cmd_balance),
+        ("analysis",cmd_analysis),("alert",cmd_alert),("fg",cmd_fg),
+        ("news",cmd_news),("convert",cmd_convert),("settings",cmd_settings),
+        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set)]:
+        app.add_handler(CommandHandler(cmd,fn))
+    app.add_handler(CallbackQueryHandler(cb))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
+    app.job_queue.run_repeating(alerts_job,      interval=90,   first=20)   # 60→90
+    app.job_queue.run_repeating(auto_job,         interval=900,  first=180)  # 600→900
+    app.job_queue.run_repeating(dca_job,          interval=600,  first=120)  # 300→600
+    app.job_queue.run_repeating(daily_report_job, interval=3600, first=120)
+    app.job_queue.run_repeating(change_alert_job, interval=600,  first=90)   # 300→600
+    app.job_queue.run_repeating(save_state_job,   interval=120,  first=60)   # 60→120
+    log.info("🚀 Bot v8.0 started!")
+    async with app:
+        await app.initialize(); await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        await asyncio.Event().wait()
+
+if __name__=="__main__":
+    asyncio.run(main())
