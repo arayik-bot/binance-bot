@@ -545,32 +545,115 @@ def compute_ta(coin,interval="1h"):
             "vol_ratio":round(vol_ratio,2),"stoch_rsi":stoch_rsi,
             "price":cur}
 
-def fear_greed():
-    v=random.randint(18,88)
-    i=0 if v<25 else 1 if v<45 else 2 if v<55 else 3 if v<75 else 4
-    return {"value":v,
-            "label":("Крайний страх","Страх","Нейтрально","Жадность","Крайняя жадность")[i],
-            "emoji":("😱","😨","😐","😏","🤑")[i]}
+# ── FEAR & GREED — Real API ───────────────────────────────────────
+_fg_cache = {}
+_fg_cache_ts = 0
 
-# ── CRYPTO NEWS (Russian, mock with real topics) ──────────────────
-CRYPTO_NEWS = [
-    ("🔴","Bitcoin корректируется после достижения исторического максимума — аналитики ждут отката"),
-    ("🟢","Ethereum готовится к обновлению — разработчики подтвердили дату"),
-    ("🟡","SEC рассматривает новые заявки на крипто ETF — рынок реагирует ростом"),
-    ("🔴","Крупный кит перевёл 10,000 BTC на биржу — возможное давление на продажу"),
-    ("🟢","Binance объявляет о листинге новых токенов в следующем квартале"),
-    ("🟡","Федеральная резервная система намекает на снижение ставок — криптовалюты растут"),
-    ("🟢","Dogecoin вырос на 15% после твита крупного инфлюенсера"),
-    ("🔴","Регуляторы Китая ужесточают контроль над крипто-транзакциями"),
-    ("🟢","Solana обрабатывает рекордное количество транзакций — сеть стабильна"),
-    ("🟡","XRP выигрывает судебное дело — Ripple освобождена от части обвинений"),
-    ("🟢","Институциональные инвесторы увеличивают позиции в Bitcoin на 40%"),
-    ("🔴","Майнеры продают BTC после халвинга — временное давление на цену"),
-]
+def fear_greed():
+    global _fg_cache, _fg_cache_ts
+    now = time.time()
+    if _fg_cache and now - _fg_cache_ts < 3600:  # кэш 1 час
+        return _fg_cache
+    try:
+        import urllib.request
+        with urllib.request.urlopen("https://api.alternative.me/fng/?limit=1", timeout=5) as r:
+            import json as _j
+            data = _j.loads(r.read())["data"][0]
+            v = int(data["value"])
+            label_map = {
+                "Extreme Fear": "Крайний страх",
+                "Fear": "Страх",
+                "Neutral": "Нейтрально",
+                "Greed": "Жадность",
+                "Extreme Greed": "Крайняя жадность",
+            }
+            label = label_map.get(data["value_classification"], data["value_classification"])
+            i = 0 if v<25 else 1 if v<45 else 2 if v<55 else 3 if v<75 else 4
+            result = {"value": v, "label": label,
+                      "emoji": ("😱","😨","😐","😏","🤑")[i]}
+            _fg_cache = result; _fg_cache_ts = now
+            return result
+    except Exception as e:
+        log.warning(f"Fear&Greed API: {e}")
+    # Fallback — последний кэш или нейтральное
+    if _fg_cache: return _fg_cache
+    return {"value": 50, "label": "Нейтрально", "emoji": "😐"}
+
+# ── CRYPTO NEWS — Real API (CryptoCompare, бесплатно) ─────────────
+_news_cache = []
+_news_cache_ts = 0
 
 def get_news(count=5):
-    random.shuffle(CRYPTO_NEWS)
-    return CRYPTO_NEWS[:count]
+    global _news_cache, _news_cache_ts
+    now = time.time()
+    if _news_cache and now - _news_cache_ts < 1800:  # кэш 30 минут
+        return _news_cache[:count]
+    try:
+        import urllib.request, urllib.parse
+        url = "https://min-api.cryptocompare.com/data/v2/news/?lang=RU&sortOrder=latest"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            import json as _j
+            data = _j.loads(r.read())
+            articles = data.get("Data", [])
+            result = []
+            for a in articles[:15]:
+                title = a.get("title","")[:120]
+                # Определяем эмоцию по ключевым словам
+                t_low = title.lower()
+                if any(w in t_low for w in ["рост","вырос","прибыль","позитив","покупка","бычий"]):
+                    emoji = "🟢"
+                elif any(w in t_low for w in ["падение","упал","риск","продажа","медвежий","обвал"]):
+                    emoji = "🔴"
+                else:
+                    emoji = "🟡"
+                result.append((emoji, title))
+            if result:
+                _news_cache = result; _news_cache_ts = now
+                return result[:count]
+    except Exception as e:
+        log.warning(f"News API: {e}")
+    # Fallback
+    if _news_cache: return _news_cache[:count]
+    return [("🟡", "Крипторынок продолжает торговаться в боковом диапазоне")]
+
+# ── WHALE TRACKER — Real large trades from Binance ────────────────
+_whale_cache = []
+_whale_cache_ts = 0
+
+def get_whale_trades(min_usd=50000):
+    global _whale_cache, _whale_cache_ts
+    now = time.time()
+    if _whale_cache and now - _whale_cache_ts < 120:  # кэш 2 минуты
+        return _whale_cache
+    if not bc:
+        return []
+    try:
+        results = []
+        for coin in ["BTC", "ETH", "BNB", "SOL", "XRP"]:
+            s = sym(coin)
+            _rate_limit()
+            trades = bc.get_recent_trades(symbol=s, limit=100)
+            for t in trades:
+                qty   = float(t["qty"])
+                price = float(t["price"])
+                usd   = qty * price
+                if usd >= min_usd:
+                    ts  = int(t["time"]) / 1000
+                    ago = int((now - ts) / 60)
+                    results.append({
+                        "coin":  coin,
+                        "qty":   qty,
+                        "price": price,
+                        "usd":   usd,
+                        "side":  "🐋 ПОКУПКА" if not t["isBuyerMaker"] else "🦈 ПРОДАЖА",
+                        "ago":   ago,
+                    })
+        results.sort(key=lambda x: -x["usd"])
+        _whale_cache = results[:10]; _whale_cache_ts = now
+        return _whale_cache
+    except Exception as e:
+        log.warning(f"Whale tracker: {e}")
+        return []
 
 # ══════════════════════════════════════════════════════════════════
 #  PORTFOLIO & PnL
@@ -1485,13 +1568,19 @@ async def cb(u,c):
             f"😱 *Страх и Жадность*\n```\n[{bar}]\n```\n{fg['emoji']} *{fg['value']}/100* — {fg['label']}",
             parse_mode=ParseMode.MARKDOWN,reply_markup=back())
     elif d=="m_whale":
-        lines=["🐋 *Крупные сделки*\n"]
-        for _ in range(6):
-            coin=random.choice(TOP_COINS); amt=round(random.uniform(50,3000),1)
-            tp=get_price(coin)["price"]; usd=int(amt*tp)
-            side=random.choice(["🐋 ПОКУПКА","🦈 ПРОДАЖА"]); ago=random.randint(1,59)
-            lines.append(f"{side} `{amt} {coin}` ~`${usd:,}` — `{ago}мин назад`")
-        await q.edit_message_text("\n".join(lines),parse_mode=ParseMode.MARKDOWN,reply_markup=back())
+        await q.edit_message_text("🐋 Загружаю крупные сделки...", parse_mode=ParseMode.MARKDOWN)
+        whales = get_whale_trades(min_usd=50000)
+        lines  = ["🐋 *Крупные сделки (>$50k)*\n"]
+        if whales:
+            for w in whales[:8]:
+                lines.append(
+                    f"{w['side']} `{w['qty']:.4f} {w['coin']}` "
+                    f"~`${w['usd']:,.0f}` @ `${w['price']:,.2f}` — `{w['ago']}мин назад`"
+                )
+        else:
+            lines.append("_Нет крупных сделок за последние минуты_\n")
+            lines.append("_(Мин. сумма: $50,000)_")
+        await q.edit_message_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN, reply_markup=back())
     elif d=="m_help":
         await q.edit_message_text("📌 `/help`",parse_mode=ParseMode.MARKDOWN,reply_markup=back())
 
