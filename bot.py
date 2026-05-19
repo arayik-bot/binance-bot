@@ -817,7 +817,8 @@ def main_kb():
          InlineKeyboardButton("💳 Баланс",         callback_data="m_balance")],
         [InlineKeyboardButton("⚡ Скальпер",        callback_data="m_scalper")],
         [InlineKeyboardButton("🔄 Мои Trailing-и",   callback_data="m_trailing")],
-        [InlineKeyboardButton("ℹ️ Помощь",           callback_data="m_help")],
+        [InlineKeyboardButton("📋 Сводка",           callback_data="m_summary"),
+         InlineKeyboardButton("ℹ️ Помощь",           callback_data="m_help")],
     ])
 
 def back(t="m_main"):
@@ -1581,6 +1582,65 @@ async def cb(u,c):
             lines.append("_Нет крупных сделок за последние минуты_\n")
             lines.append("_(Мин. сумма: $50,000)_")
         await q.edit_message_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN, reply_markup=back())
+    elif d=="m_summary":
+        # Skill pattern: use existing helpers, no new API calls, respect caching
+        bals = get_real_balance()
+        bals.pop("_error", None); bals.pop("_mock", None)
+        usdt = bals.pop("USDT", 0)
+        total = usdt
+
+        # Top 3 assets by USD value
+        asset_vals = []
+        for asset, qty in bals.items():
+            t = get_price(asset)
+            if "error" not in t:
+                val = qty * t["price"]
+                total += val
+                asset_vals.append((asset, qty, t["price"], val, t.get("change", 0)))
+        asset_vals.sort(key=lambda x: -x[3])
+
+        # Portfolio lines
+        port_lines = []
+        for asset, qty, price, val, chg in asset_vals[:3]:
+            e = "🟢" if chg >= 0 else "🔴"
+            port_lines.append(
+                f"  {e} {ce(asset)} *{asset}*: `${val:.2f}` ({chg:+.1f}%)"
+            )
+        if not port_lines:
+            port_lines = ["  _Портфель пуст_"]
+
+        # Fear & Greed (cached, no extra API call)
+        fg = fear_greed()
+
+        # Scalper status
+        sc_status = "🟢 Работает" if SCALPER_STATE["running"] else "🔴 Остановлен"
+        sc_pnl = SCALPER_STATE["daily_pnl"]
+
+        # Active alerts count
+        alert_count = len(USER_DATA[uid].get("alerts", []))
+
+        text = (
+            f"📋 *Сводка*\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"💵 *Баланс USDT:* `${usdt:.2f}`\n"
+            f"💎 *Итого:* `${total:.2f}`\n\n"
+            f"📦 *Топ активы:*\n"
+            + "\n".join(port_lines) +
+            f"\n\n{fg['emoji']} *Страх/Жадность:* `{fg['value']}` — {fg['label']}\n"
+            f"⚡ *Скальпер:* {sc_status} | P&L `${sc_pnl:+.2f}`\n"
+            f"🔔 *Алертов:* `{alert_count}`\n"
+            f"🤖 *Авто-трейд:* `{'✅ ВКЛ' if USER_DATA[uid]['auto_enabled'] else '❌ ВЫКЛ'}`\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"_Обновлено: {datetime.now().strftime('%H:%M:%S')}_"
+        )
+        await q.edit_message_text(
+            text,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Обновить", callback_data="m_summary")],
+                [InlineKeyboardButton("🔙 Назад",    callback_data="m_main")],
+            ])
+        )
     elif d=="m_help":
         await q.edit_message_text("📌 `/help`",parse_mode=ParseMode.MARKDOWN,reply_markup=back())
 
@@ -2362,6 +2422,61 @@ def scalper_kb():
         [InlineKeyboardButton("🔙 Назад",      callback_data="m_main")],
     ])
 
+async def cmd_summary(u, c):
+    """Quick dashboard: balance + top holdings + Fear&Greed + scalper status."""
+    uid = u.effective_user.id
+    USER_DATA[uid]["chat_id"] = u.effective_chat.id
+
+    bals = get_real_balance()
+    bals.pop("_error", None); bals.pop("_mock", None)
+    usdt = bals.pop("USDT", 0)
+    total = usdt
+
+    asset_vals = []
+    for asset, qty in bals.items():
+        t = get_price(asset)
+        if "error" not in t:
+            val = qty * t["price"]
+            total += val
+            asset_vals.append((asset, qty, t["price"], val, t.get("change", 0)))
+    asset_vals.sort(key=lambda x: -x[3])
+
+    port_lines = []
+    for asset, qty, price, val, chg in asset_vals[:3]:
+        e = "🟢" if chg >= 0 else "🔴"
+        port_lines.append(f"  {e} {ce(asset)} *{asset}*: `${val:.2f}` ({chg:+.1f}%)")
+    if not port_lines:
+        port_lines = ["  _Портфель пуст_"]
+
+    fg = fear_greed()
+    sc_status = "🟢 Работает" if SCALPER_STATE["running"] else "🔴 Остановлен"
+    sc_pnl = SCALPER_STATE["daily_pnl"]
+    alert_count = len(USER_DATA[uid].get("alerts", []))
+
+    text = (
+        f"📋 *Сводка*\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"💵 *Баланс USDT:* `${usdt:.2f}`\n"
+        f"💎 *Итого:* `${total:.2f}`\n\n"
+        f"📦 *Топ активы:*\n"
+        + "\n".join(port_lines) +
+        f"\n\n{fg['emoji']} *Страх/Жадность:* `{fg['value']}` — {fg['label']}\n"
+        f"⚡ *Скальпер:* {sc_status} | P&L `${sc_pnl:+.2f}`\n"
+        f"🔔 *Алертов:* `{alert_count}`\n"
+        f"🤖 *Авто-трейд:* `{'✅ ВКЛ' if USER_DATA[uid]['auto_enabled'] else '❌ ВЫКЛ'}`\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"_Обновлено: {datetime.now().strftime('%H:%M:%S')}_"
+    )
+    await u.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="m_summary")],
+            [InlineKeyboardButton("🔙 Меню",     callback_data="m_main")],
+        ])
+    )
+
+
 async def cmd_scalper(u, c):
     uid = u.effective_user.id; USER_DATA[uid]["chat_id"] = u.effective_chat.id
     await u.message.reply_text(scalper_status_text(), parse_mode=ParseMode.MARKDOWN, reply_markup=scalper_kb())
@@ -2493,7 +2608,8 @@ async def main():
         ("pnl",cmd_pnl),("orders",cmd_orders),("balance",cmd_balance),
         ("analysis",cmd_analysis),("alert",cmd_alert),("fg",cmd_fg),
         ("news",cmd_news),("convert",cmd_convert),("settings",cmd_settings),
-        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set)]:
+        ("scalper",cmd_scalper),("scalper_set",cmd_scalper_set),
+        ("summary",cmd_summary)]:
         app.add_handler(CommandHandler(cmd,fn))
     app.add_handler(CallbackQueryHandler(cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
